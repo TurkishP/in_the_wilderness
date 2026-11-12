@@ -12,7 +12,9 @@ extends Node3D
 ##   --finish               complete the stage's objectives at once
 ##   --skip=N               complete the first N objectives
 ##   --rich                 start with silver, bronze and a spare dagger
-##   --menu=shop|smith|gear|pause   open that menu
+##   --menu=shop|smith|gear|pause|creator   open that menu (--face and --turn=N for the creator)
+##   --look=sex:1,hair:2    set the player's appearance
+##   --equip=ITEM_ID        equip a piece of gear
 
 const TerrainScript := preload("res://scripts/terrain.gd")
 const PlayerScript := preload("res://scripts/player.gd")
@@ -23,6 +25,7 @@ const InteractScript := preload("res://scripts/interactable.gd")
 const RaidScript := preload("res://scripts/raid_director.gd")
 const QuestScript := preload("res://scripts/quests.gd")
 const HudScript := preload("res://scripts/hud.gd")
+const HumanScript := preload("res://scripts/human.gd")
 
 const COMPASS := ["north", "north-east", "east", "south-east", "south", "south-west", "west", "north-west"]
 
@@ -34,6 +37,7 @@ var quests
 var stage := {}
 var stage_root: Node3D
 var rng := RandomNumberGenerator.new()
+var look_rng := RandomNumberGenerator.new()   # appearance of camp people; separate so it never shifts the layout
 var camp_pos := Vector3.ZERO
 var camp_radius := 24.0
 var obj := {}
@@ -72,6 +76,7 @@ func _ready() -> void:
 	if args.has("stage"):
 		Game.save_path = "user://debug_save.json"
 		Game.stage_index = clampi(int(args["stage"]) - 1, 0, Game.stage_count() - 1)
+		Game.look_set = true   # debug runs skip the character creator
 	elif Game.has_save():
 		Game.load_game()
 	load_stage()
@@ -80,6 +85,14 @@ func _ready() -> void:
 			_finish_current_objective()
 	for i in int(args.get("skip", "0")):
 		_finish_current_objective()
+	if args.has("look"):
+		# --look=sex:1,hair:2,outfit:1  sets the player's appearance and skips the creator
+		for pair in str(args["look"]).split(","):
+			var kv: PackedStringArray = pair.split(":")
+			Game.look[kv[0]] = int(kv[1])
+		Game.look_changed.emit()
+	if args.has("equip"):
+		Game.equip(Game.add_item(str(args["equip"])))
 	if args.has("rich"):
 		Game.silver = 400
 		Game.bronze = 6
@@ -93,6 +106,12 @@ func _ready() -> void:
 			hud.open_inventory()
 		"pause":
 			hud.open_pause()
+		"creator":
+			hud.open_creator()
+			if args.has("face"):
+				hud._creator_toggle_view()
+			for i in int(args.get("turn", "0")):
+				player.turn_in_creator()
 	if args.has("shot"):
 		_shot()
 
@@ -137,6 +156,7 @@ func load_stage() -> void:
 	add_child(stage_root)
 	stage = Game.stage()
 	rng.seed = int(stage["seed"])
+	look_rng.seed = int(stage["seed"]) * 31 + 7
 	Game.begin_stage()
 	snapshot = Game.snapshot()
 	Game.save_game()
@@ -167,6 +187,14 @@ func load_stage() -> void:
 	raid.setup(stage["raid"])
 	_next_objective()
 
+	# A new journey starts in the character creator; the stage introduction follows it.
+	if Game.look_set:
+		_show_intro()
+	else:
+		hud.open_creator(_show_intro)
+
+
+func _show_intro() -> void:
 	var intro := "[i]%s  (%s)\n%s[/i]\n\n%s" % [stage["place"], stage["ref"], stage["when"], stage["intro"]]
 	hud.dialog("Stage %d:  %s" % [Game.stage_index + 1, stage["name"]], intro, [["Set out", Callable()]])
 
@@ -293,7 +321,7 @@ func _build_camp() -> void:
 	anvil.global_position = Vector3(-10.2, 0.3, 2.5)
 	var robes := [Color(0.7, 0.62, 0.5), Color(0.55, 0.5, 0.42), Color(0.72, 0.55, 0.42), Color(0.5, 0.45, 0.5)]
 	for i in 8:
-		var a := rng.randf() * TAU
+		var a := rng.randf_range(0.8, TAU - 0.8)   # keep clear of the south side, where the player enters
 		var r := rng.randf_range(9.0, 15.0)
 		spawn_npc("", "villager", Vector3(sin(a) * r, 0, cos(a) * r), robes[i % robes.size()], {"solid": false})
 
@@ -565,7 +593,7 @@ func _use_exit(_node) -> void:
 
 func _advance() -> void:
 	if Game.stage_index >= Game.stage_count() - 1:
-		hud.dialog("Forty years", "You were a boy when you crossed the sea. You have buried your parents in the wilderness and raised your children under the cloud.\n\nThe Jordan is in front of you.\n\n[i]Raids driven off: %d[/i]" % Game.raids_survived,
+		hud.dialog("Forty years", "You were a %s when you crossed the sea. You have buried your parents in the wilderness and raised your children under the cloud.\n\nThe Jordan is in front of you.\n\n[i]Raids driven off: %d[/i]" % ["girl" if int(Game.look.get("sex", 0)) == 1 else "boy", Game.raids_survived],
 			[["Begin a new journey", new_journey]])
 		return
 	Game.stage_index += 1
@@ -733,12 +761,14 @@ func _selftest() -> void:
 
 	# Gear: buying, equipping, strengthening.
 	check.call(is_equal_approx(Game.melee_power(), 12.0), "the staff starts at 12 damage")
+	check.call(player.body.weapon_kind == "staff", "the player starts with the staff in hand")
 	Game.silver = 1000
 	Game.bronze = 50
 	check.call(Game.try_buy("dagger"), "can buy a dagger")
 	var dagger: Dictionary = Game.bag[Game.bag.size() - 1]
 	Game.equip(dagger)
 	check.call(is_equal_approx(Game.melee_power(), 18.0), "the dagger is equipped")
+	check.call(player.body.weapon_kind == "dagger", "the equipped weapon shows in the hand")
 	check.call(Game.bag.size() == 1 and Game.bag[0]["id"] == "staff", "the staff went back to the bag")
 	check.call(Game.try_upgrade(dagger), "can strengthen the dagger")
 	check.call(is_equal_approx(Game.melee_power(), 18.0 * 1.12), "+1 adds 12 percent")
@@ -750,6 +780,64 @@ func _selftest() -> void:
 	check.call(Game.hurt_player(100.0) < 100.0, "armor blocks some damage")
 	Game.hp = Game.max_hp
 
+	# Figures and the character creator.
+	var figures_ok := true
+	for key in HumanScript.ORDER:
+		var names: Array = HumanScript.OPTIONS[key]
+		for v in names.size():
+			for sex in 2:
+				var l: Dictionary = Game.DEFAULT_LOOK.duplicate()
+				l["sex"] = sex
+				l[key] = v
+				var fig = HumanScript.new()
+				add_child(fig)
+				fig.build(l)
+				fig.set_weapon(["staff", "dagger", "sickle", "sword", "spear"][v % 5])
+				fig.animate(0.016, 5.0)
+				fig.swing()
+				fig.whirl()
+				if fig.hand_r == null or fig.weapon == null or fig.head.get_child_count() < 12:
+					figures_ok = false
+				fig.queue_free()
+	check.call(figures_ok, "every appearance option builds for both sexes")
+	var probe := {"sex": 0, "beard": 2, "hair": 6}
+	HumanScript.cycle(probe, "hair", 1)
+	check.call(int(probe["hair"]) == 0, "options wrap round")
+	HumanScript.cycle(probe, "sex", 1)
+	check.call(int(probe["sex"]) == 1 and int(probe["beard"]) == 0, "choosing female clears the beard")
+	Game.look["sex"] = 1
+	Game.look["outfit"] = 1
+	Game.look_changed.emit()
+	check.call(int(player.body.look["sex"]) == 1 and is_equal_approx(player.body.stride, 0.3), "editing the look rebuilds the player figure")
+	check.call(player.body.weapon_kind == "dagger", "the weapon stays in hand after a rebuild")
+	Game.look = Game.DEFAULT_LOOK.duplicate()
+	Game.look_changed.emit()
+	check.call(quests.list[0]["npc"].figure.head != null, "camp people are human figures")
+
+	# The creator panel itself, driven the way its buttons drive it.
+	var creator_closed := [false]
+	hud.auto = false
+	hud.open_creator(func() -> void: creator_closed[0] = true)
+	check.call(hud._creator.visible and get_tree().paused, "the creator opens and pauses the game")
+	check.call(is_equal_approx(player._arm.spring_length, 2.9), "the camera moves in front of the figure")
+	hud._creator_step("sex", 1)
+	check.call(int(Game.look["sex"]) == 1 and hud._creator_values["sex"].text == "Female", "the Sex row switches to female")
+	check.call(hud._creator_buttons["beard"][0].disabled, "the Beard row is locked for a woman")
+	hud._creator_step("sex", 1)
+	hud._creator_step("beard", 1)
+	check.call(hud._creator_values["beard"].text == "Short" and int(player.body.look["beard"]) == 1, "the Beard row changes the figure")
+	hud._creator_toggle_view()
+	check.call(is_equal_approx(player._arm.spring_length, 0.85), "the face view moves the camera close")
+	hud._creator_turn()
+	hud._creator_random()
+	check.call(int(Game.look["sex"]) == 0, "Randomize keeps the chosen sex")
+	hud.close_creator()
+	check.call(creator_closed[0] and Game.look_set and not get_tree().paused, "closing the creator resumes the game")
+	check.call(is_equal_approx(player._arm.spring_length, player.ARM_LENGTH), "the camera returns behind the player")
+	hud.auto = true
+	Game.look = Game.DEFAULT_LOOK.duplicate()
+	Game.look_changed.emit()
+
 	# World content.
 	check.call(get_tree().get_nodes_in_group("enemy").size() == 18, "stage 1 wildlife spawned")
 	check.call(player.global_position.y > -2.0 and player.global_position.y < 3.0, "the player stands on the ground")
@@ -757,6 +845,7 @@ func _selftest() -> void:
 
 	# Combat and loot.
 	var foe = spawn_enemy("raider", ground(30.0, 30.0), 1.0, {"drop": "linen"})
+	check.call(foe._fig != null and foe._fig.weapon_kind == "sickle", "raiders are human figures holding a blade")
 	foe.take_damage(10.0)
 	check.call(not foe.dead and foe.hp < foe.max_hp, "an enemy takes damage")
 	foe.take_damage(1e6)
@@ -911,9 +1000,14 @@ func _selftest() -> void:
 	exit_node.interact()
 	check.call(Game.stage_index == 2, "the pillar of cloud leads to the next stage")
 	Game.silver = 77
+	Game.look["hair"] = 3
+	Game.look["sex"] = 1
+	Game.look_set = true
 	Game.save_game()
 	Game.new_game()
+	check.call(not Game.look_set and int(Game.look["hair"]) == 0, "a new journey resets the look")
 	check.call(Game.load_game() and Game.stage_index == 2 and Game.silver == 77, "save and load round-trip")
+	check.call(Game.look_set and int(Game.look["hair"]) == 3 and int(Game.look["sex"]) == 1, "the look is saved with the game")
 
 	print("SELFTEST %s  (%d failed)" % ["OK" if fails.is_empty() else "FAILED", fails.size()])
 	get_tree().quit(0 if fails.is_empty() else 1)

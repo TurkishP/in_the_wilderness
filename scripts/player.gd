@@ -1,28 +1,33 @@
 extends CharacterBody3D
-## Third-person player: movement, camera, thirst, staff and sling.
+## Third-person player: movement, camera, thirst, melee weapon and sling.
 
 const ProjectileScript := preload("res://scripts/projectile.gd")
+const HumanScript := preload("res://scripts/human.gd")
 const WALK := 6.0
 const SPRINT := 9.5
 const JUMP := 6.5
 const GRAVITY := 20.0
 const LIMIT := 205.0
 const SENS := 0.0026
+const ARM_LENGTH := 5.4
+const ARM_OFFSET := Vector3(0.95, 0.25, 0)
 
 var world
 var yaw := 0.0
 var pitch := -0.2
 var pivot: Node3D
 var cam: Camera3D
-var body: Node3D
-var hand: Node3D
+var body: Node3D          # the human figure
 var dead := false
 var focus: Node = null
+var _arm: SpringArm3D
 var _melee_cd := 0.0
 var _sling_cd := 0.0
 var _sprinting := false
 var _thirst_warned := 0
 var _edge_warn := 0.0
+var _creator_view := ""   # "", "body" or "face" while the character creator is open
+var _creator_turn := 0.0
 
 
 func _ready() -> void:
@@ -38,46 +43,71 @@ func _ready() -> void:
 	cs.position.y = 0.9
 	add_child(cs)
 
-	body = Node3D.new()
+	body = HumanScript.new()
 	add_child(body)
-	var robe := Game.mesh_capsule(0.36, 1.5, Color(0.8, 0.72, 0.56))
-	robe.position.y = 0.75
-	body.add_child(robe)
-	var head := Game.mesh_sphere(0.21, Color(0.72, 0.52, 0.38))
-	head.position.y = 1.62
-	body.add_child(head)
-	var cloth := Game.mesh_sphere(0.24, Color(0.9, 0.86, 0.75))
-	cloth.position = Vector3(0, 1.68, 0.05)
-	cloth.scale = Vector3(1.0, 0.8, 1.0)
-	body.add_child(cloth)
-	var sash := Game.mesh_cyl(0.37, 0.37, 0.12, Color(0.25, 0.35, 0.55))
-	sash.position.y = 0.85
-	body.add_child(sash)
-	hand = Node3D.new()
-	hand.position = Vector3(0.48, 1.0, -0.1)
-	body.add_child(hand)
-	var staff := Game.mesh_cyl(0.03, 0.04, 1.8, Color(0.42, 0.28, 0.16))
-	staff.position.y = 0.25
-	hand.add_child(staff)
+	rebuild_figure()
+	Game.look_changed.connect(rebuild_figure)
+	Game.gear_changed.connect(refresh_weapon)
 
 	pivot = Node3D.new()
 	pivot.position = Vector3(0, 1.7, 0)
 	pivot.rotation = Vector3(pitch, yaw, 0.0)
 	add_child(pivot)
-	var arm := SpringArm3D.new()
-	arm.spring_length = 5.4
-	arm.margin = 0.3
-	arm.collision_mask = 1
-	arm.position = Vector3(0.95, 0.25, 0)
+	_arm = SpringArm3D.new()
+	_arm.spring_length = ARM_LENGTH
+	_arm.margin = 0.3
+	_arm.collision_mask = 1
+	_arm.position = ARM_OFFSET
 	# Keeps the camera in place while a dialog pauses the game.
-	arm.process_mode = Node.PROCESS_MODE_ALWAYS
-	arm.add_excluded_object(get_rid())
-	pivot.add_child(arm)
+	_arm.process_mode = Node.PROCESS_MODE_ALWAYS
+	_arm.add_excluded_object(get_rid())
+	pivot.add_child(_arm)
 	cam = Camera3D.new()
 	cam.fov = 70.0
 	cam.far = 900.0
-	arm.add_child(cam)
+	_arm.add_child(cam)
 	cam.current = true
+
+
+## Rebuilds the figure from the saved appearance. Called when the creator changes something.
+func rebuild_figure() -> void:
+	body.build(Game.look)
+	refresh_weapon()
+
+
+## Shows the equipped melee weapon in the hand.
+func refresh_weapon() -> void:
+	var def := Game.item_def(Game.equipped["melee"])
+	body.set_weapon(str(def.get("model", "staff")))
+
+
+## Moves the camera in front of the figure while the character creator is open.
+## view: "body", "face", or "" to return to normal play.
+func set_creator_view(view: String) -> void:
+	_creator_view = view
+	match view:
+		"body":
+			_arm.spring_length = 2.9
+			_arm.position = Vector3(0.75, -0.75, 0)
+			pivot.rotation = Vector3(0.0, yaw, 0.0)
+		"face":
+			_arm.spring_length = 0.85
+			_arm.position = Vector3(0.2, -0.07, 0)
+			pivot.rotation = Vector3(0.0, yaw, 0.0)
+		_:
+			_creator_turn = 0.0
+			_arm.spring_length = ARM_LENGTH
+			_arm.position = ARM_OFFSET
+			pivot.rotation = Vector3(pitch, yaw, 0.0)
+			body.rotation.y = yaw
+			return
+	# The camera sits south of the player looking north, so turn the figure to face it.
+	body.rotation.y = yaw + PI + _creator_turn
+
+
+func turn_in_creator() -> void:
+	_creator_turn = fposmod(_creator_turn + PI * 0.5, TAU)
+	set_creator_view(_creator_view)
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -105,6 +135,8 @@ func _physics_process(delta: float) -> void:
 	move_and_slide()
 	if dir.length() > 0.1:
 		body.rotation.y = lerp_angle(body.rotation.y, atan2(-dir.x, -dir.z), 12.0 * delta)
+	if not dead:
+		body.animate(delta, Vector2(velocity.x, velocity.z).length())
 
 	# Keep the player inside the playable area and above the ground.
 	var flat := Vector2(global_position.x, global_position.z)
@@ -195,10 +227,8 @@ func melee() -> void:
 		return
 	_melee_cd = 0.55
 	body.rotation.y = yaw
-	var tw := create_tween()
-	tw.tween_property(hand, "rotation:x", -1.7, 0.1)
-	tw.tween_property(hand, "rotation:x", 0.0, 0.25)
-	await get_tree().create_timer(0.12, false).timeout
+	body.swing()
+	await get_tree().create_timer(0.14, false).timeout
 	if not is_inside_tree() or dead:
 		return
 	var fwd := forward()
@@ -216,6 +246,7 @@ func sling() -> void:
 		return
 	_sling_cd = 0.9
 	body.rotation.y = yaw
+	body.whirl()
 	var origin := global_position + Vector3(0, 1.5, 0) + forward() * 0.6
 	var from := cam.global_position
 	var target := from - cam.global_transform.basis.z * 90.0

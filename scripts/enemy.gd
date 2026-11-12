@@ -2,6 +2,7 @@ extends CharacterBody3D
 ## One enemy: wildlife, raider or boss. Plain steering, no navmesh (the desert is open).
 
 const ProjectileScript := preload("res://scripts/projectile.gd")
+const HumanScript := preload("res://scripts/human.gd")
 const GRAVITY := 20.0
 
 var world
@@ -28,6 +29,7 @@ var _wander_t := 0.0
 var _cd := 0.0
 var _windup := -1.0
 var _vis: Node3D
+var _fig: Node3D   # the human figure, for human enemies only
 var _bar: MeshInstance3D
 
 
@@ -116,25 +118,17 @@ func _build(sc: float) -> void:
 					leg.position = Vector3(lx, 0.21, lz)
 					_vis.add_child(leg)
 		_:
-			var b := Game.mesh_capsule(0.36, 1.5, color)
-			b.position.y = 0.75
-			_vis.add_child(b)
-			var h := Game.mesh_sphere(0.21, Color(0.62, 0.45, 0.33))
-			h.position.y = 1.62
-			_vis.add_child(h)
-			var wrap := Game.mesh_sphere(0.24, color.darkened(0.35))
-			wrap.position = Vector3(0, 1.69, 0.05)
-			wrap.scale = Vector3(1.0, 0.75, 1.0)
-			_vis.add_child(wrap)
-			if ranged:
-				var cord := Game.mesh_box(Vector3(0.04, 0.5, 0.04), Color(0.8, 0.75, 0.6))
-				cord.position = Vector3(0.45, 0.85, -0.1)
-				_vis.add_child(cord)
-			else:
-				var blade := Game.mesh_box(Vector3(0.06, 1.1, 0.1), Color(0.75, 0.6, 0.35))
-				blade.position = Vector3(0.48, 1.15, -0.2)
-				blade.rotation.x = -0.5
-				_vis.add_child(blade)
+			var look: Dictionary = HumanScript.random_look(Game.rng, 0)
+			look["head"] = 1
+			look["outfit"] = 3 if kind == "anak" else (2 if is_boss else 0)
+			_fig = HumanScript.new()
+			_vis.add_child(_fig)
+			_fig.build(look, {
+				"cloth_color": color, "sash_color": color.darkened(0.5),
+				"head_color": color.darkened(0.45), "crown": is_boss,
+			})
+			if not ranged:
+				_fig.set_weapon("spear" if kind == "anak" else ("sword" if is_boss else "sickle"))
 
 	var quad := QuadMesh.new()
 	quad.size = Vector2(1.2, 0.12)
@@ -240,9 +234,14 @@ func _physics_process(delta: float) -> void:
 	var face := to_p if chasing else move
 	if face.length() > 0.05:
 		_vis.rotation.y = lerp_angle(_vis.rotation.y, atan2(-face.x, -face.z), 10.0 * delta)
+	if _fig != null:
+		_fig.animate(delta, Vector2(velocity.x, velocity.z).length())
 
 
 func _lunge() -> void:
+	if _fig != null:
+		_fig.swing()
+		return
 	var tw := create_tween()
 	tw.tween_property(_vis, "position:y", 0.35, 0.18)
 	tw.tween_property(_vis, "position:y", 0.0, 0.2)
@@ -250,6 +249,8 @@ func _lunge() -> void:
 
 func _shoot(player) -> void:
 	_cd = 2.2
+	if _fig != null:
+		_fig.whirl()
 	var origin := global_position + Vector3(0, height * 0.8, 0)
 	var aim: Vector3 = player.global_position + Vector3(0, 1.1, 0)
 	var shot := ProjectileScript.new()

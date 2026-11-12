@@ -2,6 +2,8 @@ extends Node
 ## Global state and rules, autoloaded as "Game".
 
 signal toast(text: String)
+signal look_changed   # the player's appearance was edited
+signal gear_changed   # equipped gear changed
 
 const Items := preload("res://data/items.gd")
 const Stages := preload("res://data/stages.gd")
@@ -9,6 +11,11 @@ const Enemies := preload("res://data/enemies.gd")
 const SLOTS := ["melee", "sling", "armor"]
 const PLUS_POWER := 0.12
 const PLUS_ARMOR := 0.02
+## Indices into the option tables of human.gd.
+const DEFAULT_LOOK := {
+	"sex": 0, "skin": 2, "face": 0, "eyes": 1, "brows": 1, "nose": 1, "hair": 0, "hair_color": 0,
+	"beard": 0, "head": 1, "outfit": 0, "cloth": 1, "sash": 0,
+}
 
 var save_path := "user://save.json"
 var stage_index := 0
@@ -22,6 +29,8 @@ var max_water := 3
 var bag: Array = []
 var equipped := {}
 var raids_survived := 0
+var look := {}            # the player's appearance
+var look_set := false     # false until the player has been through the character creator
 var workshop := false   # Bezalel's workshop stands: gear can go to +5
 var camp_hp := 100.0
 var camp_has_water := true
@@ -45,6 +54,8 @@ func new_game() -> void:
 	max_water = 3
 	raids_survived = 0
 	workshop = false
+	look = DEFAULT_LOOK.duplicate()
+	look_set = false
 	bag = []
 	equipped = {
 		"melee": {"id": "staff", "plus": 0},
@@ -164,6 +175,7 @@ func equip(inst: Dictionary) -> void:
 	bag.remove_at(i)
 	bag.append(equipped[slot])
 	equipped[slot] = inst
+	gear_changed.emit()
 
 
 ## Gear can be strengthened to +2 at first, and to +5 once Bezalel's workshop stands (stage 3).
@@ -286,6 +298,7 @@ func snapshot() -> Dictionary:
 		"stage_index": stage_index, "silver": silver, "bronze": bronze,
 		"max_water": max_water, "raids_survived": raids_survived, "workshop": workshop,
 		"bag": bag.duplicate(true), "equipped": equipped.duplicate(true),
+		"look": look.duplicate(), "look_set": look_set,
 	}
 
 
@@ -296,6 +309,12 @@ func restore(s: Dictionary) -> void:
 	max_water = int(s.get("max_water", 3))
 	raids_survived = int(s.get("raids_survived", 0))
 	workshop = bool(s.get("workshop", false))
+	look = DEFAULT_LOOK.duplicate()
+	var saved_look: Dictionary = s.get("look", {})
+	for key in look:
+		if saved_look.has(key):
+			look[key] = int(saved_look[key])
+	look_set = bool(s.get("look_set", false))
 	bag = []
 	for it in s.get("bag", []):
 		if Items.ITEMS.has(str(it["id"])):
@@ -305,6 +324,8 @@ func restore(s: Dictionary) -> void:
 		if eq.has(slot) and Items.ITEMS.has(str(eq[slot]["id"])):
 			equipped[slot] = {"id": str(eq[slot]["id"]), "plus": int(eq[slot]["plus"])}
 	begin_stage()
+	look_changed.emit()
+	gear_changed.emit()
 
 
 func has_save() -> bool:

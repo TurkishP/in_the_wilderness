@@ -8,9 +8,15 @@ pillar of cloud from stage to stage.
 Built with Godot 4.7 and GDScript. Everything on screen is generated in code from primitive
 shapes, so the repository holds no binary assets and a fresh clone is ready to run.
 
-**Status:** playable prototype. Placeholder art, no sound, and the numbers are not yet balanced.
+**Status:** playable prototype. Stylised figures and props, no sound, and the numbers are not
+yet balanced.
 
 ![Stage 1 opening](screenshots/01_stage1_intro.png)
+
+A new journey starts in the character creator: sex, skin, face, hair, beard, head covering,
+clothing and colors.
+
+![Character creator](screenshots/06_character_creator.png)
 
 ## Set up a new PC
 
@@ -87,7 +93,7 @@ Run the self-test after every change, and take a screenshot after any visual cha
 | E | Talk or use |
 | Q | Drink from the waterskin |
 | Tab | Gear |
-| Esc | Pause menu and controls |
+| Esc | Pause menu, controls, and "Change how you look" |
 
 ## How the game is put together
 
@@ -103,12 +109,29 @@ completing its main objectives in order, then walking to the pillar of cloud.
 | [scripts/world.gd](scripts/world.gd) | Builds a stage, runs the main objectives, holds the debug arguments and the self-test |
 | [scripts/quests.gd](scripts/quests.gd) | Side quests: gather items, find a lost child, investigate a wrongdoer |
 | [scripts/raid_director.gd](scripts/raid_director.gd) | Raids on the camp, growing with each raid and each stage |
-| [scripts/hud.gd](scripts/hud.gd) | All interface. Every menu is one `dialog()` call |
+| [scripts/hud.gd](scripts/hud.gd) | All interface. Every menu is one `dialog()` call; the character creator is its own panel |
+| [scripts/human.gd](scripts/human.gd) | The human figure used for the player, camp people and raiders: option tables, mesh building, walk and strike animation |
 | `scripts/player.gd`, `enemy.gd`, `npc.gd`, `projectile.gd`, `pickup.gd`, `interactable.gd`, `terrain.gd` | The things in the world |
 
 To add or change content, edit the tables in `data/`. A new stage is one more dictionary in
 `data/stages.gd`; the field list is in the comment at the top of that file. The five main
 objective types are `reach`, `collect`, `boss`, `defend` and `rescue`.
+
+### Characters
+
+Every person is the same figure from `scripts/human.gd`, driven by a "look": a dictionary of
+indices into the `OPTIONS` table at the top of that file (sex, skin, face, eyes, brows, nose,
+hair, hair color, beard, head covering, outfit, cloth color, sash color). The player's look is
+edited in the character creator and saved with the game. Camp people and raiders get a random
+look, shaped by their role.
+
+To add a choice, append a name to the matching list in `OPTIONS` and handle the new index where
+that part is built (`build()`, `_build_head()` or `_build_hair()`). The creator picks it up by
+itself. To check the result without clicking through the menu:
+
+```bash
+godot --path . --resolution 1600x900 -- --stage=1 --look=sex:1,hair:2,outfit:1 --menu=creator --face --shot=/full/path/out.png
+```
 
 ## Conventions
 
@@ -144,6 +167,8 @@ with `--stage=N` or `--selftest` write to separate files and leave the real save
 
 ## Not done yet
 
-- Art, animation and sound. Every figure and prop is a placeholder shape.
+- Art and sound. Figures are stylised and built from primitives, with a simple procedural walk
+  and strike. There are no modelled characters, textures or audio yet.
+- Armor does not show on the figure. Only the melee weapon in the hand changes with gear.
 - Balance. Damage, prices and timings are first guesses and have not been tuned by play.
 - Stages 2 to 10 reuse the stage-1 building blocks with different data and need hand tuning.

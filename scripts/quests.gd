@@ -186,7 +186,7 @@ func _start_investigation(q: Dictionary) -> void:
 		per_side[side] = slot + 1
 		var p2: Vector2 = dir * 12.0 + across * (float(slot) * 3.0 - 3.0)
 		var who: String = "Man in a %s sash" % SASHES[t[0]]
-		var npc = world.spawn_npc(who, "suspect", world.ground(p2.x, p2.y), Color(0.45, 0.4, 0.33), {"sash": SASH_COLORS[t[0]]})
+		var npc = world.spawn_npc(who, "suspect", world.ground(p2.x, p2.y), Color(0.45, 0.4, 0.33), {"sash_color": SASH_COLORS[t[0]]})
 		npc.quest = q
 		npc.data = {
 			"culprit": i == 0,

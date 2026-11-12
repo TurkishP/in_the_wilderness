@@ -4,6 +4,8 @@ extends CanvasLayer
 ## Every menu in the game is one dialog(): a title, some text and a list of options.
 ## The LAST option must always be the safe one (leave, close, not now), because Esc picks it.
 
+const HumanScript := preload("res://scripts/human.gd")
+
 var world
 var auto := false         # test mode: a dialog picks its first option at once and never shows
 var no_capture := false   # test mode: leave the mouse alone
@@ -29,6 +31,13 @@ var _hurt: ColorRect
 var _cbs: Array = []
 var _open_frame := -1
 var _auto_depth := 0
+var _panel_style: StyleBoxFlat
+var _creator: PanelContainer
+var _creator_values := {}
+var _creator_buttons := {}
+var _creator_view_button: Button
+var _creator_done := Callable()
+var _creator_face := false
 
 
 func _ready() -> void:
@@ -111,6 +120,7 @@ func _ready() -> void:
 	sb.set_corner_radius_all(8)
 	sb.set_content_margin_all(20)
 	_panel.add_theme_stylebox_override("panel", sb)
+	_panel_style = sb
 	var v := VBoxContainer.new()
 	v.add_theme_constant_override("separation", 10)
 	_panel.add_child(v)
@@ -130,6 +140,7 @@ func _ready() -> void:
 	v.add_child(_rows)
 	_panel.visible = false
 	root.add_child(_panel)
+	_build_creator(root)
 
 
 func _anchor(c: Control, l: float, r: float, t: float, b: float, ol: float, o_r: float, ot: float, ob: float) -> void:
@@ -312,7 +323,11 @@ func _input(event: InputEvent) -> void:
 	if not (event is InputEventKey) or not event.pressed or event.echo:
 		return
 	var key: int = event.physical_keycode
-	if _panel.visible:
+	if _creator.visible:
+		get_viewport().set_input_as_handled()
+		if key == KEY_ESCAPE or key == KEY_ENTER:
+			close_creator()
+	elif _panel.visible:
 		get_viewport().set_input_as_handled()
 		if Engine.get_process_frames() == _open_frame:
 			return
@@ -333,6 +348,7 @@ func _input(event: InputEvent) -> void:
 func open_pause() -> void:
 	var text := "[b]Controls[/b]\nW A S D  move        Shift  sprint        Space  jump\nLeft mouse  strike        Right mouse  sling a stone at the crosshair\nE  talk or use        Q  drink        Tab  gear        Esc  this menu\n\nThirst falls as you travel and faster when you run. Rest inside the camp to heal.\nRaiders go for the camp. If the camp falls, the stage starts again."
 	dialog("Paused", text, [
+		["Change how you look", open_creator],
 		["Start a new journey", _confirm_new],
 		["Quit the game", world.quit_game],
 		["Resume", Callable()],
@@ -432,3 +448,119 @@ func _upgrade(inst: Dictionary) -> void:
 	if Game.try_upgrade(inst):
 		Game.say("Strengthened: %s" % Game.item_name(inst))
 	open_smith()
+
+
+# ---------------------------------------------------------------- character creator
+
+func _build_creator(root: Control) -> void:
+	_creator = PanelContainer.new()
+	_anchor(_creator, 1.0, 1.0, 0.5, 0.5, -600, -40, 0, 0)
+	_creator.grow_vertical = Control.GROW_DIRECTION_BOTH
+	_creator.add_theme_stylebox_override("panel", _panel_style)
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 6)
+	_creator.add_child(v)
+	v.add_child(_text("Your scout", 26, Color(1.0, 0.85, 0.5)))
+	v.add_child(_text("Choose how you look. You can change it later from the pause menu.", 15))
+	for key in HumanScript.ORDER:
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 8)
+		var name_label := _text(str(HumanScript.LABELS[key]), 18)
+		name_label.custom_minimum_size.x = 150
+		row.add_child(name_label)
+		var prev := _small_button("<", _creator_step.bind(key, -1))
+		row.add_child(prev)
+		var value := _text("", 18, Color(1.0, 0.95, 0.75))
+		value.custom_minimum_size.x = 230
+		value.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		row.add_child(value)
+		var next := _small_button(">", _creator_step.bind(key, 1))
+		row.add_child(next)
+		v.add_child(row)
+		_creator_values[key] = value
+		_creator_buttons[key] = [prev, next]
+	var bottom := HBoxContainer.new()
+	bottom.add_theme_constant_override("separation", 8)
+	bottom.add_child(_small_button("Randomize", _creator_random, 120))
+	bottom.add_child(_small_button("Turn", _creator_turn, 80))
+	_creator_view_button = _small_button("Look at face", _creator_toggle_view, 140)
+	bottom.add_child(_creator_view_button)
+	bottom.add_child(_small_button("Done", close_creator, 100))
+	v.add_child(bottom)
+	_creator.visible = false
+	root.add_child(_creator)
+
+
+func _small_button(text: String, callback: Callable, width: float = 40.0) -> Button:
+	var b := Button.new()
+	b.text = text
+	b.custom_minimum_size = Vector2(width, 34)
+	b.add_theme_font_size_override("font_size", 17)
+	b.focus_mode = Control.FOCUS_NONE
+	b.pressed.connect(callback)
+	return b
+
+
+## Opens the character creator. `done` runs when the player closes it.
+func open_creator(done: Callable = Callable()) -> void:
+	if auto:
+		Game.look_set = true
+		if done.is_valid():
+			done.call()
+		return
+	_panel.visible = false
+	_cbs.clear()
+	_creator_done = done
+	_creator_face = false
+	_refresh_creator()
+	_creator.visible = true
+	_set_open(true)
+	world.player.set_creator_view("body")
+
+
+func close_creator() -> void:
+	if not _creator.visible:
+		return
+	_creator.visible = false
+	Game.look_set = true
+	Game.save_game()
+	world.player.set_creator_view("")
+	_set_open(false)
+	Game.block_input()
+	var done := _creator_done
+	_creator_done = Callable()
+	if done.is_valid():
+		done.call()
+
+
+func _refresh_creator() -> void:
+	var female: bool = int(Game.look.get("sex", 0)) == 1
+	for key in HumanScript.ORDER:
+		var value: Label = _creator_values[key]
+		value.text = HumanScript.value_name(key, Game.look)
+		var locked: bool = key == "beard" and female
+		for b in _creator_buttons[key]:
+			b.disabled = locked
+	_creator_view_button.text = "Look at body" if _creator_face else "Look at face"
+
+
+func _creator_step(key: String, step: int) -> void:
+	HumanScript.cycle(Game.look, key, step)
+	Game.look_changed.emit()
+	_refresh_creator()
+
+
+func _creator_random() -> void:
+	Game.look = HumanScript.random_look(Game.rng, int(Game.look.get("sex", 0)))
+	Game.look_changed.emit()
+	_refresh_creator()
+
+
+func _creator_turn() -> void:
+	world.player.turn_in_creator()
+
+
+func _creator_toggle_view() -> void:
+	_creator_face = not _creator_face
+	world.player.set_creator_view("face" if _creator_face else "body")
+	_refresh_creator()
