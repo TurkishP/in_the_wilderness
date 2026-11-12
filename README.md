@@ -7,18 +7,17 @@ pillar of cloud from stage to stage.
 
 Built with Godot 4.7 and GDScript. The people are modelled, rigged low-poly characters from
 Quaternius' free CC0 kits, dressed in tunics, robes and headcloths that the game generates to
-fit them. The terrain, tents and props are built in code from simple shapes. Everything needed
-is in the repository, so a fresh clone is ready to run.
+fit them. Each stage's land is shaped from a model of the real region, so the sea and the
+mountains stand where they do at that camp, and it is strewn with rocks, dry grass, bushes and
+acacias. A round map in the corner shows your surroundings and position, and M opens a map of
+the whole journey. Everything needed is in the repository, so a fresh clone is ready to run.
 
 **Status:** playable prototype. No sound, and the numbers are not yet balanced.
 
 A new journey starts in the character creator: sex, skin, face shape, eyes, brows, hair,
 beard, head covering, clothing and colors.
 
-The pictures in `screenshots/` were taken before the modelled characters were added and still
-show the earlier placeholder figures.
-
-![Stage 1 opening](screenshots/01_stage1_intro.png)
+![The camp before Mount Sinai](screenshots/sinai_camp.png)
 
 ## Set up a new PC
 
@@ -96,18 +95,21 @@ Run the self-test after every change, and take a screenshot after any visual cha
 | E | Talk or use |
 | Q | Drink from the waterskin |
 | Tab | Gear |
+| M | Map of the journey |
 | Esc | Pause menu, controls, and "Change how you look" |
 
 ## How the game is put together
 
-Each stage has a camp at the centre of a 400 m wide stretch of desert. A stage is finished by
-completing its main objectives in order, then walking to the pillar of cloud.
+Each stage has a camp at the centre of about 400 m of walkable ground, set in a 5 km backdrop
+of that place's real mountains and seas. A stage is finished by completing its main objectives
+in order, then walking to the pillar of cloud.
 
 | File | What it holds |
 |---|---|
 | [data/stages.gd](data/stages.gd) | The ten stages: texts, scripture references, main objectives, side quests, raid settings |
 | [data/items.gd](data/items.gd) | Weapons, slings and armor |
 | [data/enemies.gd](data/enemies.gd) | Wildlife, raiders and bosses |
+| [data/region.gd](data/region.gd) | A coarse model of the Sinai, the Negev, Edom and Moab: mountain masses, ranges, the rift valley, coastlines |
 | [scripts/game.gd](scripts/game.gd) | Autoload `Game`: saved state, gear rules, save file, mesh helpers |
 | [scripts/world.gd](scripts/world.gd) | Builds a stage, runs the main objectives, holds the debug arguments and the self-test |
 | [scripts/quests.gd](scripts/quests.gd) | Side quests: gather items, find a lost child, investigate a wrongdoer |
@@ -115,13 +117,52 @@ completing its main objectives in order, then walking to the pillar of cloud.
 | [scripts/hud.gd](scripts/hud.gd) | All interface. Every menu is one `dialog()` call; the character creator is its own panel |
 | [scripts/human.gd](scripts/human.gd) | The human figure used for the player, camp people and raiders: option tables, body and hair, generated clothes, weapons, animation |
 | [scripts/retarget.gd](scripts/retarget.gd) | Converts the animation kit's clips to the character kit's skeleton when the game starts |
+| [scripts/terrain.gd](scripts/terrain.gd) | One stage's land: detailed ground, far backdrop and water, all taken from the region model |
+| [scripts/scenery.gd](scripts/scenery.gd) | Rocks, dry grass, bushes and acacias, drawn in batches |
+| [scripts/minimap.gd](scripts/minimap.gd) | The round map in the corner |
+| [scripts/region_map.gd](scripts/region_map.gd) | The map of the whole journey (M) |
 | [assets/characters/](assets/characters/) | Bodies, hair, textures and animations (CC0, see `LICENSE.txt` there) |
 | [tools/prepare_characters.py](tools/prepare_characters.py) | Rebuilds `assets/characters/` from the downloaded kit. Only needed if the source kit changes |
-| `scripts/player.gd`, `enemy.gd`, `npc.gd`, `projectile.gd`, `pickup.gd`, `interactable.gd`, `terrain.gd` | The things in the world |
+| `scripts/player.gd`, `enemy.gd`, `npc.gd`, `projectile.gd`, `pickup.gd`, `interactable.gd` | The things in the world |
 
 To add or change content, edit the tables in `data/`. A new stage is one more dictionary in
 `data/stages.gd`; the field list is in the comment at the top of that file. The five main
 objective types are `reach`, `collect`, `boss`, `defend` and `rescue`.
+
+### The land
+
+`data/region.gd` is a hand-built model of the country between Egypt and the Jordan. Mountain
+masses are smooth bumps (the southern Sinai massif, Jebel Musa, Jebel Serbal, the et-Tih
+plateau, the Negev highlands), ranges are ridges along a line (Edom, Moab, Midian, the Judean
+hills), the Arabah and the Jordan valley are a trough, and each sea is a short outline with a
+water level. It is built from well-known coordinates and heights, not from survey data, and is
+right to roughly ten kilometres and a few hundred metres of height. The comment at the top of
+the file lists what it contains.
+
+Each stage has a `site`: the latitude and longitude of its camp. The sites follow traditional
+identifications (Ain Hawarah for Marah, Jebel Musa for Sinai, Tell el-Qudeirat for Kadesh, and
+so on); several are debated, and the map screen says so. `scripts/terrain.gd` reads the model
+around the site at 25 real metres to one game metre, with heights raised by half:
+
+- **Ground:** 600 m square with dunes and collision, level at the camp.
+- **Backdrop:** 5 km square (125 km on the real map), without collision.
+- **Water:** every sea within the backdrop, at its own level. The Dead Sea lies far below Moab.
+
+So at Marah the Gulf of Suez is in view to the west, at Sinai a mountain stands south-east of
+the camp, near Elath the Gulf of Aqaba lies to the south, and from the plateau of Moab the Dead
+Sea is below. The self-test checks each of these.
+
+The ground is colored point by point (sand tones, dry-grass patches, bare rock on slopes) under
+a fine grain texture. `scripts/scenery.gd` scatters the plants and stones; a stage's `veg`
+numbers say how much grass, bush, tree and rock grows there.
+
+The corner map is a top-down picture of the ground, lit from the north-west, with the player at
+the centre and north up. It marks the camp, the objective, people who need help, things to
+collect, wildlife and raiders; marks beyond its edge sit on the rim. Under it are the place name
+and the position as it would read on a real map.
+
+To move a camp, change its `site`. To reshape the country, edit the tables in `data/region.gd`
+and compare `Region.elevation()` with known heights (the self-test has examples).
 
 ### Characters
 
@@ -200,7 +241,7 @@ with `--stage=N` or `--selftest` write to separate files and leave the real save
 - Sound and music.
 - Clothing is simple: plain colors, no textures or folds. Armor does not show on the figure;
   only the melee weapon in the hand changes with gear.
-- Terrain, tents and props are still simple shapes. Animals are still built from boxes.
-- New screenshots. The current ones predate the modelled characters.
+- The land is a coarse model, not survey data. Water is a flat sheet. Tents and camp props are
+  still simple shapes, and animals are still built from boxes.
 - Balance. Damage, prices and timings are first guesses and have not been tuned by play.
 - Stages 2 to 10 reuse the stage-1 building blocks with different data and need hand tuning.

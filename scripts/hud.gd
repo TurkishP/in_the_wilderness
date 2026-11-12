@@ -5,11 +5,14 @@ extends CanvasLayer
 ## The LAST option must always be the safe one (leave, close, not now), because Esc picks it.
 
 const HumanScript := preload("res://scripts/human.gd")
+const MinimapScript := preload("res://scripts/minimap.gd")
+const RegionMapScript := preload("res://scripts/region_map.gd")
 
 var world
 var auto := false         # test mode: a dialog picks its first option at once and never shows
 var no_capture := false   # test mode: leave the mouse alone
 var last_dialog := ""
+var minimap: Control       # the round map in the top-right corner
 
 var _hp: ProgressBar
 var _thirst: ProgressBar
@@ -31,6 +34,10 @@ var _hurt: ColorRect
 var _cbs: Array = []
 var _open_frame := -1
 var _auto_depth := 0
+var _coords: Label
+var _map_panel: PanelContainer
+var _region: Control
+var _map_note: Label
 var _panel_style: StyleBoxFlat
 var _creator: PanelContainer
 var _creator_values := {}
@@ -95,8 +102,18 @@ func _ready() -> void:
 	_toasts.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	root.add_child(_toasts)
 
+	minimap = MinimapScript.new()
+	minimap.world = world
+	var map_size: float = (minimap.RADIUS + minimap.MARGIN) * 2.0
+	_anchor(minimap, 1.0, 1.0, 0.0, 0.0, -map_size - 20.0, -20.0, 14.0, 14.0 + map_size)
+	root.add_child(minimap)
+	_coords = _text("", 14, Color(1.0, 0.95, 0.8))
+	_anchor(_coords, 1.0, 1.0, 0.0, 0.0, -map_size - 60.0, 20.0, 18.0 + map_size, 60.0 + map_size)
+	_coords.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	root.add_child(_coords)
+
 	_quests = _text("", 16)
-	_anchor(_quests, 1.0, 1.0, 0.0, 0.0, -400, -24, 20, 20)
+	_anchor(_quests, 1.0, 1.0, 0.0, 0.0, -400, -24, 76.0 + map_size, 76.0 + map_size)
 	_quests.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	root.add_child(_quests)
 
@@ -141,6 +158,7 @@ func _ready() -> void:
 	_panel.visible = false
 	root.add_child(_panel)
 	_build_creator(root)
+	_build_map(root)
 
 
 func _anchor(c: Control, l: float, r: float, t: float, b: float, ol: float, o_r: float, ot: float, ob: float) -> void:
@@ -203,6 +221,7 @@ func _process(delta: float) -> void:
 	_camp.visible = raid_on
 	_camp_label.visible = raid_on
 	_camp.value = Game.camp_hp
+	_coords.text = "%s\n%s    M: map" % [world.stage["place"], minimap.coordinates()]
 	_update_markers()
 
 
@@ -323,7 +342,11 @@ func _input(event: InputEvent) -> void:
 	if not (event is InputEventKey) or not event.pressed or event.echo:
 		return
 	var key: int = event.physical_keycode
-	if _creator.visible:
+	if _map_panel.visible:
+		get_viewport().set_input_as_handled()
+		if key == KEY_M or key == KEY_ESCAPE or key == KEY_ENTER:
+			close_map()
+	elif _creator.visible:
 		get_viewport().set_input_as_handled()
 		if key == KEY_ESCAPE or key == KEY_ENTER:
 			close_creator()
@@ -339,6 +362,8 @@ func _input(event: InputEvent) -> void:
 			_choose(0)
 	elif key == KEY_TAB:
 		open_inventory()
+	elif key == KEY_M:
+		open_map()
 	elif key == KEY_ESCAPE:
 		open_pause()
 
@@ -346,7 +371,7 @@ func _input(event: InputEvent) -> void:
 # ---------------------------------------------------------------- menus
 
 func open_pause() -> void:
-	var text := "[b]Controls[/b]\nW A S D  move        Shift  sprint        Space  jump\nLeft mouse  strike        Right mouse  sling a stone at the crosshair\nE  talk or use        Q  drink        Tab  gear        Esc  this menu\n\nThirst falls as you travel and faster when you run. Rest inside the camp to heal.\nRaiders go for the camp. If the camp falls, the stage starts again."
+	var text := "[b]Controls[/b]\nW A S D  move        Shift  sprint        Space  jump\nLeft mouse  strike        Right mouse  sling a stone at the crosshair\nE  talk or use        Q  drink        Tab  gear        M  map        Esc  this menu\n\nThirst falls as you travel and faster when you run. Rest inside the camp to heal.\nRaiders go for the camp. If the camp falls, the stage starts again."
 	dialog("Paused", text, [
 		["Change how you look", open_creator],
 		["Start a new journey", _confirm_new],
@@ -564,3 +589,50 @@ func _creator_toggle_view() -> void:
 	_creator_face = not _creator_face
 	world.player.set_creator_view("face" if _creator_face else "body")
 	_refresh_creator()
+
+
+# ---------------------------------------------------------------- maps
+
+## Called when a stage has been built: the minimap takes a new picture of the ground.
+func show_stage(terrain) -> void:
+	minimap.set_terrain(terrain)
+	_region.stage_index = Game.stage_index
+
+
+func _build_map(root: Control) -> void:
+	_map_panel = PanelContainer.new()
+	_anchor(_map_panel, 0.5, 0.5, 0.5, 0.5, 0, 0, 0, 0)
+	_map_panel.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	_map_panel.grow_vertical = Control.GROW_DIRECTION_BOTH
+	_map_panel.add_theme_stylebox_override("panel", _panel_style)
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 8)
+	_map_panel.add_child(v)
+	v.add_child(_text("The journey", 24, Color(1.0, 0.85, 0.5)))
+	_region = RegionMapScript.new()
+	v.add_child(_region)
+	_map_note = _text("", 15)
+	v.add_child(_map_note)
+	v.add_child(_small_button("Close  (M)", close_map, 120))
+	_map_panel.visible = false
+	root.add_child(_map_panel)
+
+
+## Opens the map of the whole journey.
+func open_map() -> void:
+	if auto or _panel.visible or _creator.visible:
+		return
+	_region.stage_index = Game.stage_index
+	_region.queue_redraw()
+	_map_note.text = "Camp %d of %d:  %s  (%s)\nCamp sites follow traditional identifications; several are debated." % [
+		Game.stage_index + 1, Game.stage_count(), world.stage["place"], world.stage["ref"]]
+	_map_panel.visible = true
+	_set_open(true)
+
+
+func close_map() -> void:
+	if not _map_panel.visible:
+		return
+	_map_panel.visible = false
+	_set_open(false)
+	Game.block_input()

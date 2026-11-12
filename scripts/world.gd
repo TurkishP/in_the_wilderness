@@ -12,7 +12,7 @@ extends Node3D
 ##   --finish               complete the stage's objectives at once
 ##   --skip=N               complete the first N objectives
 ##   --rich                 start with silver, bronze and a spare dagger
-##   --menu=shop|smith|gear|pause|creator   open that menu (--face and --turn=N for the creator)
+##   --menu=shop|smith|gear|pause|creator|map   open that menu (--face and --turn=N for the creator)
 ##   --look=sex:1,hair:2    set the player's appearance
 ##   --equip=ITEM_ID        equip a piece of gear
 
@@ -26,12 +26,15 @@ const RaidScript := preload("res://scripts/raid_director.gd")
 const QuestScript := preload("res://scripts/quests.gd")
 const HudScript := preload("res://scripts/hud.gd")
 const HumanScript := preload("res://scripts/human.gd")
+const SceneryScript := preload("res://scripts/scenery.gd")
+const RegionScript := preload("res://data/region.gd")
 
 const COMPASS := ["north", "north-east", "east", "south-east", "south", "south-west", "west", "north-west"]
 
 var hud
 var player
 var terrain
+var scenery
 var raid
 var quests
 var stage := {}
@@ -106,6 +109,8 @@ func _ready() -> void:
 			hud.open_inventory()
 		"pause":
 			hud.open_pause()
+		"map":
+			hud.open_map()
 		"creator":
 			hud.open_creator()
 			if args.has("face"):
@@ -132,7 +137,9 @@ func _build_sky() -> void:
 	env.tonemap_mode = Environment.TONE_MAPPER_FILMIC
 	env.fog_enabled = true
 	env.fog_light_color = Color(0.87, 0.79, 0.65)
-	env.fog_density = 0.003
+	# Thin haze: the mountains two kilometres off fade but stay in view.
+	env.fog_density = 0.00045
+	env.fog_aerial_perspective = 0.4
 	env.fog_sky_affect = 0.1
 	var we := WorldEnvironment.new()
 	we.environment = env
@@ -167,9 +174,12 @@ func load_stage() -> void:
 
 	terrain = TerrainScript.new()
 	stage_root.add_child(terrain)
-	terrain.setup(int(stage["seed"]), stage["sand"])
+	terrain.setup(stage)
 	_build_camp()
-	_scatter_props()
+	scenery = SceneryScript.new()
+	stage_root.add_child(scenery)
+	scenery.build(stage, rng, terrain)
+	hud.show_stage(terrain)
 
 	player = PlayerScript.new()
 	player.world = self
@@ -336,35 +346,6 @@ func _use_water_jars(_node) -> void:
 		Game.say("You drink deeply and fill your waterskin.")
 	else:
 		Game.say("The jars are dry. The camp needs water.")
-
-
-func _scatter_props() -> void:
-	var rock: Color = stage["rock"]
-	for i in 110:
-		var a := rng.randf() * TAU
-		var r := rng.randf_range(36.0, 240.0)
-		var s := rng.randf_range(0.6, 3.4)
-		var size := Vector3(s * rng.randf_range(0.8, 1.6), s * rng.randf_range(0.5, 1.1), s * rng.randf_range(0.8, 1.6))
-		var m := Game.mesh_box(size, rock.darkened(rng.randf_range(0.0, 0.25)))
-		stage_root.add_child(m)
-		m.global_position = ground(sin(a) * r, cos(a) * r) + Vector3(0, size.y * 0.3, 0)
-		m.rotation = Vector3(rng.randf_range(-0.2, 0.2), rng.randf() * TAU, rng.randf_range(-0.2, 0.2))
-		if s > 1.7:
-			_solid_box(m, size, Vector3.ZERO)
-	for i in 55:
-		var a := rng.randf() * TAU
-		var r := rng.randf_range(34.0, 230.0)
-		_shrub(ground(sin(a) * r, cos(a) * r), rng.randf_range(0.7, 1.5))
-
-
-func _shrub(pos: Vector3, s: float) -> void:
-	var trunk := Game.mesh_cyl(0.07 * s, 0.11 * s, 1.5 * s, Color(0.36, 0.26, 0.18))
-	stage_root.add_child(trunk)
-	trunk.global_position = pos + Vector3(0, 0.75 * s, 0)
-	var crown := Game.mesh_sphere(1.0 * s, Color(0.42, 0.5, 0.28))
-	crown.scale = Vector3(1.0, 0.4, 1.0)
-	stage_root.add_child(crown)
-	crown.global_position = pos + Vector3(0, 1.6 * s, 0)
 
 
 func _palm(pos: Vector3) -> void:
@@ -669,6 +650,33 @@ func get_markers() -> Array:
 	return out
 
 
+## Everything the minimap marks: [{pos, kind}]. Kinds: camp, objective, exit, raider, wild, giver, item.
+func get_map_points() -> Array:
+	var out: Array = [{"pos": camp_pos, "kind": "camp"}]
+	if stage_done:
+		if is_instance_valid(exit_node):
+			out.append({"pos": exit_node.global_position, "kind": "exit"})
+	else:
+		match str(obj.get("type", "")):
+			"reach", "collect", "rescue":
+				out.append({"pos": obj_pos, "kind": "objective"})
+			"boss":
+				for e in obj_nodes:
+					if is_instance_valid(e) and not e.dead:
+						out.append({"pos": e.global_position, "kind": "objective"})
+	for e in get_tree().get_nodes_in_group("enemy"):
+		if not e.is_boss:
+			out.append({"pos": e.global_position, "kind": "raider" if e.is_raider else "wild"})
+	for p in get_tree().get_nodes_in_group("pickup"):
+		if p.kind == "quest" or p.kind == "objective":
+			out.append({"pos": p.global_position, "kind": "item"})
+	if is_instance_valid(quests):
+		for q in quests.list:
+			if q["status"] == "new" or q["status"] == "ready":
+				out.append({"pos": q["npc"].global_position, "kind": "giver"})
+	return out
+
+
 func npc_interact(npc) -> void:
 	match str(npc.role):
 		"giver":
@@ -871,6 +879,49 @@ func _selftest() -> void:
 	Game.look = Game.DEFAULT_LOOK.duplicate()
 	Game.look_changed.emit()
 
+	# The land: real geography, seamless ground, scenery, and the two maps.
+	check.call(RegionScript.elevation(RegionScript.to_km(28.539, 33.975)) > 2000.0, "the model puts Mount Sinai above 2000 m")
+	check.call(RegionScript.sea_name(RegionScript.sea_at(RegionScript.to_km(31.4, 35.48))) == "Dead Sea", "the Dead Sea is where it should be")
+	check.call(RegionScript.elevation(RegionScript.to_km(31.87, 35.44)) < -100.0, "Jericho lies below sea level")
+	var seam := 0.0
+	for i in terrain.size:
+		var along: float = -terrain.HALF + i * terrain.CELL
+		seam = maxf(seam, absf(terrain.heights[i] - terrain._far(along, -terrain.HALF)))
+		seam = maxf(seam, absf(terrain.heights[i * terrain.size] - terrain._far(-terrain.HALF, along)))
+	check.call(seam < 0.01, "the ground meets the backdrop without a step")
+	var west_water := false
+	for w in terrain.waters:
+		var mid := Vector2.ZERO
+		for p in w["outline"]:
+			mid += p
+		if mid.x / w["outline"].size() < 0.0 and float(w["y"]) < 0.0:
+			west_water = true
+	check.call(west_water, "at Marah the Gulf of Suez lies to the west, below the camp")
+	check.call(absf(terrain.surface_y(0.0, 0.0)) < 0.01 and absf(terrain.surface_y(8.0, -8.0)) < 0.05, "the camp stands on level ground")
+	check.call(scenery.counts["grass"] > 200 and scenery.counts["bushes"] > 30 and scenery.counts["trees"] >= 3 and scenery.counts["rocks"] > 100,
+		"the wilderness has grass, bushes, trees and rocks (%s)" % [scenery.counts])
+	check.call(hud.minimap.has_picture(), "the minimap has a picture of the ground")
+	var kinds := {}
+	for m in get_map_points():
+		kinds[m["kind"]] = true
+	check.call(kinds.has("camp") and kinds.has("objective") and kinds.has("wild") and kinds.has("giver"), "the minimap marks the camp, the objective, wildlife and people needing help")
+	check.call(hud.minimap.offset_of(Vector3(50, 0, 0), Vector3.ZERO).x > 0.0 and hud.minimap.offset_of(Vector3(0, 0, -50), Vector3.ZERO).y < 0.0, "on the minimap east is right and north is up")
+	player.global_position = ground(0.0, 13.0) + Vector3(0, 0.2, 0)
+	check.call(hud.minimap.coordinates().begins_with("29.3"), "the minimap reads the camp's latitude (%s)" % hud.minimap.coordinates())
+	await get_tree().process_frame
+	await get_tree().process_frame
+	check.call(hud.minimap.draws > 0, "the minimap draws without errors")
+	hud.auto = false
+	hud.open_map()
+	check.call(hud._map_panel.visible and get_tree().paused, "the region map opens")
+	check.call(hud._region.route().size() == Game.stage_count() + 1, "the route passes through every camp")
+	await get_tree().process_frame
+	await get_tree().process_frame
+	check.call(hud._region.draws > 0, "the region map draws without errors")
+	hud.close_map()
+	check.call(not hud._map_panel.visible and not get_tree().paused, "the region map closes")
+	hud.auto = true
+
 	# World content.
 	check.call(get_tree().get_nodes_in_group("enemy").size() == 18, "stage 1 wildlife spawned")
 	check.call(player.global_position.y > -2.0 and player.global_position.y < 3.0, "the player stands on the ground")
@@ -1009,7 +1060,9 @@ func _selftest() -> void:
 	# Every stage builds and can be completed.
 	for i in Game.stage_count():
 		Game.stage_index = i
+		var load_started := Time.get_ticks_msec()
 		load_stage()
+		print("stage %2d built in %4d ms   scenery %s   waters %d" % [i + 1, Time.get_ticks_msec() - load_started, scenery.counts, terrain.waters.size()])
 		await get_tree().physics_frame
 		await get_tree().process_frame
 		var steps := 0
@@ -1023,6 +1076,27 @@ func _selftest() -> void:
 			check.call(Game.camp_has_water, "finding Marah fills the camp jars")
 		if i == 2:
 			check.call(Game.max_plus() == 5, "the workshop unlocks +5")
+			var peak := 0.0
+			var peak_at := Vector2.ZERO
+			for kx in range(-14, 15):
+				for kz in range(-14, 15):
+					var y: float = terrain.surface_y(kx * 50.0, kz * 50.0)
+					if y > peak:
+						peak = y
+						peak_at = Vector2(kx * 50.0, kz * 50.0)
+			check.call(peak > 25.0 and peak_at.x > 0.0 and peak_at.y > 0.0, "at Sinai a mountain stands to the south-east of the camp (%.0f m high at %s)" % [peak, peak_at])
+		if i == 7:
+			var south_sea := false
+			for w in terrain.waters:
+				if str(w["name"]) == "Gulf of Aqaba":
+					south_sea = true
+			check.call(south_sea, "near Elath the Gulf of Aqaba is in view")
+		if i == 8:
+			var deep := 0.0
+			for w in terrain.waters:
+				if str(w["name"]) == "Dead Sea":
+					deep = float(w["y"])
+			check.call(deep < -40.0, "from Moab the Dead Sea lies far below (%.0f m)" % deep)
 	exit_node.interact()
 	check.call(Game.stage_index == 0 and not stage_done, "the ending starts a new journey")
 

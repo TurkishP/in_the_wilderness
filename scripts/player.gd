@@ -64,7 +64,7 @@ func _ready() -> void:
 	pivot.add_child(_arm)
 	cam = Camera3D.new()
 	cam.fov = 70.0
-	cam.far = 900.0
+	cam.far = 6000.0
 	_arm.add_child(cam)
 	cam.current = true
 
