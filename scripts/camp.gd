@@ -13,6 +13,7 @@ extends Node3D
 ## Everything here is on level ground, so heights are simply metres above zero.
 
 const SceneryScript := preload("res://scripts/scenery.gd")
+const CloudScript := preload("res://scripts/cloud_pillar.gd")
 const CUBIT := 0.457
 const COURT := Vector2(100.0 * CUBIT, 50.0 * CUBIT)     # east-west by north-south
 const GAP := 1.4              # least space between two tents
@@ -36,8 +37,8 @@ var nodes := PackedVector2Array()     # places people walk between
 var links: Array = []                 # for each node, the nodes it connects to
 var spots: Array = []                 # seated and working people: [{pos, look_at, pose, who, work, seat}]
 var tabernacle: Node3D
-var cloud: MeshInstance3D            # over the tabernacle
-var guide: MeshInstance3D            # the pillar of cloud standing by the camp before there is a tabernacle
+var cloud: Node3D                    # over the tabernacle
+var guide: Node3D                    # the pillar of cloud standing by the camp before there is a tabernacle
 var _site: Node3D
 var _lights := 0
 
@@ -309,10 +310,10 @@ func raise_tabernacle() -> void:
 	_solid(tabernacle, Vector3(1.2, 0.9, 1.2), Vector3(4.6, 0.45, 0))
 
 	# The cloud that covers the tent by day.
-	cloud = Game.mesh_cyl(8.0, 3.0, 150.0, Color(0.96, 0.96, 0.94), 0.35, 0.5)
-	cloud.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	cloud.position = Vector3(cx, height + 75.0, 0)
+	cloud = CloudScript.new()
+	cloud.position = Vector3(cx, height + 1.0, 0)
 	tabernacle.add_child(cloud)
+	cloud.build(145.0, 3.2, 11.0, 7)
 
 
 ## The cloud is taken up from over the tent when it is time to set out.
@@ -328,10 +329,10 @@ func lift_cloud() -> void:
 func stand_cloud(bearing: float) -> void:
 	var b := deg_to_rad(bearing)
 	var out := radius() + 16.0
-	guide = Game.mesh_cyl(8.0, 3.5, 150.0, Color(0.96, 0.96, 0.94), 0.35, 0.5)
-	guide.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	guide.position = Vector3(sin(b) * out, 75.0, -cos(b) * out)
+	guide = CloudScript.new()
+	guide.position = Vector3(sin(b) * out, 0.0, -cos(b) * out)
 	add_child(guide)
+	guide.build(150.0, 4.0, 11.0, 3)
 
 
 # ================================================================ life in the camp

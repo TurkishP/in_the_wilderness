@@ -144,7 +144,12 @@ objective types are `reach`, `collect`, `boss`, `defend` and `rescue`.
 - **The pillar of cloud:** in the first two stages there is no tabernacle yet. It was set up
   at Sinai on the first day of the first month of the second year (Exodus 40:17). Until then
   the pillar of cloud stands at the edge of the camp on the side of the way ahead
-  (Exodus 13:21-22), and moves on when the stage is finished.
+  (Exodus 13:21-22), and moves on when the stage is finished. The pillar
+  (`scripts/cloud_pillar.gd`) is a slowly turning column of a few hundred soft white billows
+  under a faint haze; the same thing stands over the tabernacle and marks the way out of a
+  finished stage.
+
+  ![The pillar of cloud beyond the first camp](screenshots/pillar_of_cloud.png)
 - **Gathering ground:** the main fire, the trader, the craftsman, the captain and the people
   with errands. Before Sinai it is the middle of the camp. Once the tabernacle stands it lies
   just south of the court.

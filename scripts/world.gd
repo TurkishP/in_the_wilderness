@@ -29,6 +29,7 @@ const HumanScript := preload("res://scripts/human.gd")
 const SceneryScript := preload("res://scripts/scenery.gd")
 const RegionScript := preload("res://data/region.gd")
 const CampScript := preload("res://scripts/camp.gd")
+const CloudScript := preload("res://scripts/cloud_pillar.gd")
 const TalkScript := preload("res://data/talk.gd")
 
 const COMPASS := ["north", "north-east", "east", "south-east", "south", "south-west", "west", "north-west"]
@@ -638,10 +639,10 @@ func _finish_stage() -> void:
 	var ang := rng.randf() * TAU
 	var pos := ground(sin(ang) * (camp_radius + 38.0), cos(ang) * (camp_radius + 38.0))
 	camp.lift_cloud()
-	var cloud := Game.mesh_cyl(8.0, 4.0, 160.0, Color(0.97, 0.97, 0.95), 0.4, 0.55)
-	cloud.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	var cloud = CloudScript.new()
 	stage_root.add_child(cloud)
-	cloud.global_position = pos + Vector3(0, 80.0, 0)
+	cloud.global_position = pos
+	cloud.build(155.0, 4.0, 11.5, 11)
 	exit_node = _interactable("Follow the pillar of cloud", pos + Vector3(0, 0.5, 0), 9.0, _use_exit)
 	Game.say("The cloud has lifted from the camp.")
 
@@ -982,6 +983,7 @@ func _selftest() -> void:
 	check.call(terrain.water_y(-285.0, 0.0) > -1e8 and terrain.water_y(-player.LIMIT, 0.0) < -1e8, "the shore is close by, just beyond where the scout can walk")
 	check.call(obj_pos.x > 0.0 and obj_pos.z > 0.0, "Marah lies ahead to the south-east (%s)" % obj_pos)
 	check.call(camp.guide != null and camp.guide.visible and camp.guide.position.z > 0.0, "the pillar of cloud stands by the camp on the way ahead")
+	check.call(camp.guide.puffs > 150 and camp.guide.top > 130.0, "the pillar is a tall column of many billows (%d, %.0f m)" % [camp.guide.puffs, camp.guide.top])
 	var all_years := true
 	for st in Game.stage_count():
 		if str(Game.Stages.LIST[st].get("year", "")) == "":
