@@ -796,11 +796,44 @@ func _selftest() -> void:
 				fig.animate(0.016, 5.0)
 				fig.swing()
 				fig.whirl()
-				if fig.hand_r == null or fig.weapon == null or fig.head.get_child_count() < 12:
+				if fig.skeleton == null or fig.weapon == null or fig.garments.size() < 4:
 					figures_ok = false
 				fig.queue_free()
 	check.call(figures_ok, "every appearance option builds for both sexes")
-	var probe := {"sex": 0, "beard": 2, "hair": 6}
+
+	# The modelled character: clothes, hair, animation and how weapons are carried.
+	var robed = HumanScript.new()
+	add_child(robed)
+	robed.build({"sex": 1, "brows": 1, "outfit": 2, "head": 0, "hair": 2})
+	check.call(robed.garments.has("skirt_long") and robed.garments.has("cloak") and robed.garments.has("mantle"), "a robe and cloak is made of skirt, cloak and mantle")
+	check.call(robed.head.get_child_count() == 1, "uncovered hair hangs on the head")
+	robed.build({"sex": 1, "brows": 1, "outfit": 0, "head": 1, "hair": 2, "beard": 1})
+	await get_tree().process_frame
+	check.call(robed.head.get_child_count() == 0 and robed.garments.has("cap"), "a headcloth replaces the hair, and a woman gets no beard")
+	check.call(not robed.garments.has("cloak") and robed.garments.has("skirt_short"), "a short tunic has no cloak")
+	var anims: AnimationLibrary = HumanScript._libraries[1]
+	check.call(anims.get_animation("Walk").loop_mode == Animation.LOOP_LINEAR and anims.get_animation("Sword_Attack").loop_mode == Animation.LOOP_NONE, "walk cycles loop and strikes do not")
+	var bones: Skeleton3D = robed.skeleton
+	var foot := bones.find_bone("foot_l")
+	var standing: Vector3 = bones.get_bone_global_pose(foot).origin
+	var foot_travel := 0.0
+	for i in 20:
+		robed.animate(0.05, 6.0)
+		robed._tree.advance(0.05)
+		foot_travel = maxf(foot_travel, bones.get_bone_global_pose(foot).origin.distance_to(standing))
+	check.call(foot_travel > 0.25, "the legs move when the figure runs")
+	robed.set_weapon("staff")
+	var hand_idle: Basis = HumanScript.pose_basis(anims.get_animation("Idle"), bones, bones.find_bone("hand_r"), 0.0)
+	check.call((hand_idle * robed.weapon.transform.basis).y.y > 0.95, "a staff is carried upright")
+	robed.set_weapon("sword")
+	var blade: Vector3 = (hand_idle * robed.weapon.transform.basis).y
+	check.call(blade.z > 0.8 and blade.x < 0.0, "a sword at rest points forward and away from the body")
+	robed.swing()
+	check.call(not robed.weapon.transform.is_equal_approx(robed._carry), "a strike turns the weapon into the fist")
+	robed.die()
+	check.call(robed.dead, "a figure can fall")
+	robed.queue_free()
+	var probe := {"sex": 0, "beard": 1, "hair": 4}
 	HumanScript.cycle(probe, "hair", 1)
 	check.call(int(probe["hair"]) == 0, "options wrap round")
 	HumanScript.cycle(probe, "sex", 1)
@@ -808,7 +841,7 @@ func _selftest() -> void:
 	Game.look["sex"] = 1
 	Game.look["outfit"] = 1
 	Game.look_changed.emit()
-	check.call(int(player.body.look["sex"]) == 1 and is_equal_approx(player.body.stride, 0.3), "editing the look rebuilds the player figure")
+	check.call(int(player.body.look["sex"]) == 1 and player.body.garments.has("skirt_long"), "editing the look rebuilds the player figure")
 	check.call(player.body.weapon_kind == "dagger", "the weapon stays in hand after a rebuild")
 	Game.look = Game.DEFAULT_LOOK.duplicate()
 	Game.look_changed.emit()
@@ -825,7 +858,7 @@ func _selftest() -> void:
 	check.call(hud._creator_buttons["beard"][0].disabled, "the Beard row is locked for a woman")
 	hud._creator_step("sex", 1)
 	hud._creator_step("beard", 1)
-	check.call(hud._creator_values["beard"].text == "Short" and int(player.body.look["beard"]) == 1, "the Beard row changes the figure")
+	check.call(hud._creator_values["beard"].text == "Full" and int(player.body.look["beard"]) == 1, "the Beard row changes the figure")
 	hud._creator_toggle_view()
 	check.call(is_equal_approx(player._arm.spring_length, 0.85), "the face view moves the camera close")
 	hud._creator_turn()
@@ -869,8 +902,9 @@ func _selftest() -> void:
 	dummy.speed = 0.0
 	dummy.dmg = 0.0
 	player.melee()
-	await _wait(0.5)
+	await _wait(0.6)
 	check.call(is_equal_approx(dummy.hp, dummy.max_hp - Game.melee_power()), "a swing hits the enemy in front")
+	await _wait(0.6)
 	dummy.global_position = p0 + Vector3(-0.95, 0, 12.0)
 	await _wait(0.3)
 	var dummy_hp: float = dummy.hp
@@ -879,7 +913,7 @@ func _selftest() -> void:
 	check.call(is_equal_approx(dummy.hp, dummy_hp - Game.sling_power()), "a sling stone hits what the crosshair is on")
 	player.yaw = 0.0
 	player.melee()
-	await _wait(0.5)
+	await _wait(0.6)
 	check.call(is_equal_approx(dummy.hp, dummy_hp - Game.sling_power()), "a swing misses an enemy behind and far away")
 	dummy.take_damage(1e9)
 

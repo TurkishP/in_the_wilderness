@@ -13,7 +13,7 @@ const PLUS_POWER := 0.12
 const PLUS_ARMOR := 0.02
 ## Indices into the option tables of human.gd.
 const DEFAULT_LOOK := {
-	"sex": 0, "skin": 2, "face": 0, "eyes": 1, "brows": 1, "nose": 1, "hair": 0, "hair_color": 0,
+	"sex": 0, "skin": 2, "face": 0, "eyes": 1, "brows": 0, "hair": 0, "hair_color": 0,
 	"beard": 0, "head": 1, "outfit": 0, "cloth": 1, "sash": 0,
 }
 

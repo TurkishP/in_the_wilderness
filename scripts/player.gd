@@ -71,7 +71,8 @@ func _ready() -> void:
 
 ## Rebuilds the figure from the saved appearance. Called when the creator changes something.
 func rebuild_figure() -> void:
-	body.build(Game.look)
+	# The figure keeps animating while the game is paused, so it is alive in the character creator.
+	body.build(Game.look, {"always_animate": true})
 	refresh_weapon()
 
 
@@ -225,10 +226,10 @@ func forward() -> Vector3:
 func melee() -> void:
 	if _melee_cd > 0.0 or dead:
 		return
-	_melee_cd = 0.55
+	_melee_cd = body.STRIKE_TIME + 0.05
 	body.rotation.y = yaw
 	body.swing()
-	await get_tree().create_timer(0.14, false).timeout
+	await get_tree().create_timer(body.STRIKE_HIT, false).timeout
 	if not is_inside_tree() or dead:
 		return
 	var fwd := forward()
@@ -279,12 +280,12 @@ func _die() -> void:
 		return
 	dead = true
 	Game.hp = 0.0
-	body.rotation.x = -PI * 0.5
+	body.die()
 	world.on_player_died()
 
 
 func revive(at: Vector3) -> void:
 	dead = false
-	body.rotation.x = 0.0
+	body.revive()
 	velocity = Vector3.ZERO
 	global_position = at

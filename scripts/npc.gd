@@ -34,7 +34,7 @@ func setup(n: String, r: String, color: Color, opts: Dictionary = {}) -> void:
 			sex = 1
 	var look: Dictionary = HumanScript.random_look(world.look_rng, sex)
 	if lower.contains("elder"):
-		look.merge({"hair_color": 4, "beard": 2, "outfit": 1, "head": 1}, true)
+		look.merge({"hair_color": 4, "beard": 1, "outfit": 1, "head": 1}, true)
 	match role:
 		"merchant":
 			look.merge({"sex": 0, "outfit": 2, "beard": 1}, true)

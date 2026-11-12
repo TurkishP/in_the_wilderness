@@ -192,7 +192,7 @@ func _physics_process(delta: float) -> void:
 				if dp > r * 0.8:
 					move = to_p / maxf(dp, 0.01)
 				if dp <= r and _cd <= 0.0:
-					_windup = 0.38
+					_windup = 0.3
 					_lunge()
 	elif is_raider:
 		var to_c: Vector3 = world.camp_pos - global_position
@@ -291,5 +291,10 @@ func _die() -> void:
 			world.spawn_pickup("item", item, pos + Vector3(-0.8, 0, 0.4))
 	world.on_enemy_died(self)
 	var tw := create_tween()
-	tw.tween_property(_vis, "scale", Vector3.ONE * 0.05, 0.3)
+	if _fig != null:
+		# People fall and lie for a moment; animals just shrink away.
+		_fig.die()
+		tw.tween_interval(2.6)
+	else:
+		tw.tween_property(_vis, "scale", Vector3.ONE * 0.05, 0.3)
 	tw.tween_callback(queue_free)
