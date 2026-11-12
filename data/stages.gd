@@ -6,13 +6,17 @@ extends RefCounted
 ##   mult        enemy strength multiplier
 ##   tier        best gear tier the trader sells and raiders drop
 ##   foe         people name used for human enemies in this stage
+##   year        which year of the forty this is, shown beside the stage name
+##   heading     compass bearing in degrees of the way ahead. Before there is a tabernacle the
+##               pillar of cloud stands on that side of the camp (Exodus 13:21-22).
 ##   site        [latitude, longitude] of the camp. Traditional identifications; several are debated.
 ##               The stage's mountains and seas are taken from this place (see data/region.gd).
 ##   veg         how much [grass, bushes, trees, rocks] grows there; 1.0 is average wilderness
 ##   wild        wildlife kind -> count
 ##   raid        kind, label, size, interval [min, max] seconds, slingers
 ##   objectives  main objectives, done in order:
-##       reach   {text, label, dist, site}
+##       reach   {text, label, dist, site}   any objective may give "bearing" (degrees from north)
+##               to fix which way it lies; otherwise the direction is random
 ##       collect {text, label, item, count, dist, spread, color, guards}
 ##       boss    {text, boss | names, dist, scale, drop, guards}
 ##       defend  {text, count}
@@ -22,20 +26,20 @@ extends RefCounted
 const LIST := [
 	{
 		"name": "The Bitter Water",
-		"place": "Wilderness of Shur",
-		"ref": "Exodus 15:22-27",
-		"when": "First month out of Egypt",
-		"intro": "Three days from the sea and no water. The jars are nearly dry, and the people are asking Moses what they will drink.\n\nYou are a young scout under Joshua. Find water before the camp fails.",
+		"place": "Wilderness of Shur, by the Red Sea",
+		"ref": "Exodus 14:21-15:27",
+		"when": "First month, two days after the crossing",
+		"intro": "Two days ago the sea closed over Pharaoh's chariots. Israel has gone out into the wilderness of Shur, with the water still in sight to the west and the pillar of cloud ahead.\n\nThere is nothing to drink. The jars brought from Egypt are nearly dry, and the people are asking Moses what they will drink.\n\nYou are a young scout under Joshua. Find water before the camp fails.",
 		"outro": "The cloud lifts. Ahead lies Elim, with twelve springs and seventy palm trees, and beyond it the Wilderness of Sin.",
 		"mult": 1.0, "tier": 2, "seed": 1522, "foe": "Desert",
-		"site": [29.33, 32.95], "veg": [0.5, 0.6, 0.4, 0.8],
+		"site": [29.61, 32.765], "heading": 150.0, "veg": [0.5, 0.6, 0.4, 0.8], "year": "Year 1",
 		"heat": 1.5, "start_thirst": 55.0, "start_water": 2, "camp_water": false,
 		"sand": Color(0.82, 0.71, 0.5), "rock": Color(0.55, 0.45, 0.36),
 		"wild": {"snake": 10, "scorpion": 8},
 		"raid": {"kind": "jackal", "label": "Jackals", "size": 3, "interval": [80.0, 130.0]},
 		"objectives": [
-			{"type": "reach", "text": "Find water for the camp", "label": "Marah", "dist": 150.0, "site": "spring", "unlock": "water",
-				"done": "You find a spring, but the water is bitter. The people name the place Marah.\n\nMoses cries out to the LORD, who shows him a piece of wood. He throws it into the water, and the water turns sweet. The jars are full again."},
+			{"type": "reach", "text": "Find water for the camp", "label": "Marah", "dist": 175.0, "bearing": 150.0, "site": "spring", "unlock": "water",
+				"done": "You find a spring, but the water is bitter. On the third day the camp comes up to it, and the people name the place Marah.\n\nMoses cries out to the LORD, who shows him a piece of wood. He throws it into the water, and the water turns sweet. The jars are full again."},
 		],
 		"quests": [
 			{"type": "gather", "giver": "A potter", "title": "Wood for the fires", "item": "Tamarisk branch", "count": 5, "color": Color(0.5, 0.35, 0.2),
@@ -54,7 +58,7 @@ const LIST := [
 		"intro": "The food from Egypt is gone. In the morning, when the dew lifts, thin flakes like frost cover the ground. \"It is the bread that the LORD has given you to eat.\"\n\nGather it. Then watch the rear of the column, because Amalek is near.",
 		"outro": "The cloud moves on toward the mountain of God.",
 		"mult": 1.25, "tier": 2, "seed": 1601, "foe": "Amalekite",
-		"site": [28.75, 33.5], "veg": [0.7, 1.0, 1.0, 1.3],
+		"site": [28.75, 33.5], "heading": 130.0, "veg": [0.7, 1.0, 1.0, 1.3], "year": "Year 1",
 		"sand": Color(0.84, 0.74, 0.55), "rock": Color(0.5, 0.42, 0.35),
 		"wild": {"snake": 8, "scorpion": 8, "jackal": 4},
 		"raid": {"kind": "raider", "label": "Amalekite raiders", "size": 3, "interval": [85.0, 130.0]},
@@ -81,7 +85,7 @@ const LIST := [
 		"intro": "Israel camps in front of the mountain. Here the law is given and the tabernacle is to be built. Bezalel and Oholiab need acacia wood for its frames.\n\nBring it in, and keep clear of the boundary set around the mountain.",
 		"outro": "In the second year, on the twentieth day of the second month, the cloud lifts from the tabernacle. The camp sets out by its divisions.",
 		"mult": 1.5, "tier": 3, "seed": 1901, "foe": "Desert",
-		"site": [28.575, 33.935], "veg": [0.5, 0.7, 0.5, 1.8],
+		"site": [28.575, 33.935], "veg": [0.5, 0.7, 0.5, 1.8], "year": "Year 1",
 		"sand": Color(0.76, 0.62, 0.48), "rock": Color(0.5, 0.33, 0.28),
 		"wild": {"snake": 8, "scorpion": 8, "jackal": 6},
 		"raid": {"kind": "raider", "label": "Desert raiders", "size": 3, "interval": [80.0, 125.0], "slingers": true},
@@ -106,7 +110,7 @@ const LIST := [
 		"intro": "Three days' march from Sinai. The people complain about the hardship and crave the food of Egypt.\n\nScout the way ahead into the wilderness of Paran, then hold the camp when raiders test it.",
 		"outro": "The cloud settles in the wilderness of Paran, at Kadesh.",
 		"mult": 1.8, "tier": 3, "seed": 1033, "foe": "Desert",
-		"site": [29.75, 34.35], "veg": [0.3, 0.4, 0.2, 1.0],
+		"site": [29.75, 34.35], "veg": [0.3, 0.4, 0.2, 1.0], "year": "Year 2",
 		"sand": Color(0.8, 0.68, 0.5), "rock": Color(0.48, 0.4, 0.33),
 		"wild": {"snake": 9, "scorpion": 9, "jackal": 7},
 		"raid": {"kind": "raider", "label": "Desert raiders", "size": 4, "interval": [75.0, 115.0], "slingers": true},
@@ -133,7 +137,7 @@ const LIST := [
 		"intro": "Moses sends twelve men to spy out Canaan, one from each tribe. You go with them as far as the Valley of Eshcol.\n\nBring back fruit of the land. The sons of Anak live there.",
 		"outro": "The camp turns back into the wilderness, by the way to the Red Sea.",
 		"mult": 2.2, "tier": 4, "seed": 1323, "foe": "Canaanite",
-		"site": [30.65, 34.42], "veg": [1.4, 1.4, 1.4, 0.8],
+		"site": [30.65, 34.42], "veg": [1.4, 1.4, 1.4, 0.8], "year": "Year 2",
 		"sand": Color(0.72, 0.66, 0.46), "rock": Color(0.45, 0.42, 0.34),
 		"wild": {"snake": 8, "scorpion": 8, "jackal": 8},
 		"raid": {"kind": "raider", "label": "Canaanite raiders", "size": 4, "interval": [75.0, 110.0], "slingers": true},
@@ -160,7 +164,7 @@ const LIST := [
 		"intro": "Years pass in the wilderness. The generation that left Egypt grows old, and their children grow up under the cloud. Clothes and sandals do not wear out.\n\nRaiders come often now. Hold the camp.",
 		"outro": "In the first month the whole congregation comes again to the wilderness of Zin, and the people stay at Kadesh.",
 		"mult": 2.6, "tier": 4, "seed": 1620, "foe": "Desert",
-		"site": [30.3, 34.6], "veg": [0.6, 0.7, 0.4, 1.0],
+		"site": [30.3, 34.6], "veg": [0.6, 0.7, 0.4, 1.0], "year": "Years 3 to 39",
 		"sand": Color(0.8, 0.7, 0.52), "rock": Color(0.5, 0.42, 0.34),
 		"wild": {"snake": 10, "scorpion": 10, "jackal": 8},
 		"raid": {"kind": "raider", "label": "Desert raiders", "size": 5, "interval": [55.0, 85.0], "slingers": true},
@@ -185,7 +189,7 @@ const LIST := [
 		"intro": "Miriam is buried at Kadesh. Edom refuses passage through its land, so the camp turns aside. Aaron dies on Mount Hor.\n\nThen the Canaanite king of Arad attacks on the road and takes captives. Bring them back.",
 		"outro": "The camp sets out from Mount Hor by the way to the Red Sea, to go around the land of Edom.",
 		"mult": 3.1, "tier": 4, "seed": 2101, "foe": "Canaanite",
-		"site": [30.42, 35.22], "veg": [0.4, 0.7, 0.8, 1.0],
+		"site": [30.42, 35.22], "veg": [0.4, 0.7, 0.8, 1.0], "year": "Year 40",
 		"sand": Color(0.78, 0.66, 0.5), "rock": Color(0.52, 0.36, 0.3),
 		"wild": {"snake": 9, "scorpion": 9, "jackal": 8},
 		"raid": {"kind": "raider", "label": "Canaanite raiders", "size": 5, "interval": [65.0, 100.0], "slingers": true},
@@ -212,7 +216,7 @@ const LIST := [
 		"intro": "The road around Edom is long and the people grow impatient. They speak against God and against Moses, and fiery serpents come among them.\n\nMoses is told to make a serpent of bronze and set it on a pole. Bring bronze.",
 		"outro": "The camp moves on: Oboth, Iye-abarim, the Valley of Zered, and across the Arnon to the border of the Amorites.",
 		"mult": 3.7, "tier": 5, "seed": 2104, "foe": "Desert",
-		"site": [29.72, 35.05], "veg": [0.3, 0.5, 0.5, 1.2],
+		"site": [29.72, 35.05], "veg": [0.3, 0.5, 0.5, 1.2], "year": "Year 40",
 		"sand": Color(0.74, 0.58, 0.44), "rock": Color(0.5, 0.3, 0.26),
 		"wild": {"fiery_serpent": 24, "scorpion": 6},
 		"raid": {"kind": "raider", "label": "Desert raiders", "size": 5, "interval": [65.0, 100.0], "slingers": true},
@@ -237,7 +241,7 @@ const LIST := [
 		"intro": "Israel asks Sihon king of the Amorites for passage along the King's Highway. He refuses and marches out to Jahaz.\n\nBeyond him waits Og king of Bashan, last of the Rephaim, whose bed of iron is nine cubits long.",
 		"outro": "The camp settles in the plains of Moab, beyond the Jordan at Jericho.",
 		"mult": 4.4, "tier": 5, "seed": 2121, "foe": "Amorite",
-		"site": [31.55, 35.85], "veg": [1.6, 1.0, 0.8, 0.8],
+		"site": [31.55, 35.85], "veg": [1.6, 1.0, 0.8, 0.8], "year": "Year 40",
 		"sand": Color(0.7, 0.64, 0.46), "rock": Color(0.3, 0.3, 0.32),
 		"wild": {"snake": 8, "scorpion": 10, "jackal": 10},
 		"raid": {"kind": "raider", "label": "Amorite soldiers", "size": 6, "interval": [60.0, 95.0], "slingers": true},
@@ -264,7 +268,7 @@ const LIST := [
 		"intro": "Balak of Moab hired Balaam to curse Israel, and every curse turned to blessing. Then Midian drew the people into the worship of Baal of Peor.\n\nNow Israel is sent against Midian. After that, the river.",
 		"outro": "Forty years. The wilderness is behind you, and Jericho stands across the water.",
 		"mult": 5.2, "tier": 5, "seed": 3101, "foe": "Midianite",
-		"site": [31.83, 35.63], "veg": [1.2, 1.3, 2.0, 0.6],
+		"site": [31.83, 35.63], "veg": [1.2, 1.3, 2.0, 0.6], "year": "Year 40",
 		"sand": Color(0.68, 0.66, 0.44), "rock": Color(0.46, 0.42, 0.34),
 		"wild": {"snake": 8, "scorpion": 8, "jackal": 10},
 		"raid": {"kind": "raider", "label": "Midianite raiders", "size": 6, "interval": [60.0, 90.0], "slingers": true},

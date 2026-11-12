@@ -20,7 +20,7 @@ fresh clone is ready to run.
 A new journey starts in the character creator: sex, skin, face shape, eyes, brows, hair,
 beard, head covering, clothing and colors.
 
-![The camp before Mount Sinai](screenshots/sinai_camp.png)
+![The first camp, two days after the crossing, with the Red Sea beyond](screenshots/red_sea_camp.png)
 
 ## Set up a new PC
 
@@ -138,9 +138,13 @@ objective types are `reach`, `collect`, `boss`, `defend` and `rescue`.
 
 `scripts/camp.gd` lays out the camp afresh for each stage.
 
-- **Tents:** about fifty, of five kinds (small ridge tents, long low tents of dark goat hair,
-  round tents, open shelters on poles, large family tents), in varied sizes, never less than
-  1.9 m apart. The gathering ground and the ways in are kept clear.
+- **Tents:** sixty or more, of five kinds (small ridge tents, long low tents of dark goat
+  hair, round tents, open shelters on poles, large family tents), in varied sizes, packed as
+  close as 1.4 m. The gathering ground and the ways in are kept clear.
+- **The pillar of cloud:** in the first two stages there is no tabernacle yet. It was set up
+  at Sinai on the first day of the first month of the second year (Exodus 40:17). Until then
+  the pillar of cloud stands at the edge of the camp on the side of the way ahead
+  (Exodus 13:21-22), and moves on when the stage is finished.
 - **Gathering ground:** the main fire, the trader, the craftsman, the captain and the people
   with errands. Before Sinai it is the middle of the camp. Once the tabernacle stands it lies
   just south of the court.
@@ -181,8 +185,8 @@ around the site at 25 real metres to one game metre, with heights raised by half
 - **Backdrop:** 5 km square (125 km on the real map), without collision.
 - **Water:** every sea within the backdrop, at its own level. The Dead Sea lies far below Moab.
 
-So at Marah the Gulf of Suez is in view to the west, at Sinai a mountain stands south-east of
-the camp, near Elath the Gulf of Aqaba lies to the south, and from the plateau of Moab the Dead
+So at the first camp, two days' march from the crossing, the Gulf of Suez lies close by to the
+west; at Sinai a mountain stands south-east of the camp, near Elath the Gulf of Aqaba lies to the south, and from the plateau of Moab the Dead
 Sea is below. The self-test checks each of these.
 
 The ground is colored point by point (sand tones, dry-grass patches, bare rock on slopes) under

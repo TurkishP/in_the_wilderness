@@ -214,7 +214,7 @@ func _process(delta: float) -> void:
 		var f: Vector3 = world.player.forward()
 		facing = "    Facing %s" % world.compass(f.x, f.z)
 	_stats.text = "Water %d/%d    Silver %d    Bronze %d%s" % [Game.water, Game.max_water, Game.silver, Game.bronze, facing]
-	_stage.text = "Stage %d of %d   %s   (%s)" % [Game.stage_index + 1, Game.stage_count(), world.stage["name"], world.stage["ref"]]
+	_stage.text = "%s   Stage %d of %d   %s   (%s)" % [world.stage.get("year", ""), Game.stage_index + 1, Game.stage_count(), world.stage["name"], world.stage["ref"]]
 	_objective.text = world.objective_text()
 	_quests.text = world.quests.tracker_text() if is_instance_valid(world.quests) else ""
 	var raid_on: bool = is_instance_valid(world.raid) and world.raid.active

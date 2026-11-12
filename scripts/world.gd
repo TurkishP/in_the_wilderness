@@ -6,7 +6,7 @@ extends Node3D
 ##   --stage=N              start a throwaway game at stage N
 ##   --auto                 never show dialogs (each picks its first option)
 ##   --shot=PATH            save a screenshot to PATH and exit
-##   --frames=N --yaw=DEG --pitch=DEG   screenshot timing and camera
+##   --frames=N --yaw=DEG --pitch=DEG --arm=M   screenshot timing and camera (arm: camera distance)
 ##   --tp=X,Z | obj | exit | enemy | raid   move the player there first (--back=M metres short)
 ##   --raid                 start a raid at once
 ##   --finish               complete the stage's objectives at once
@@ -304,6 +304,8 @@ func _build_camp() -> void:
 	stage_root.add_child(camp)
 	camp.build(Game.stage_index, rng)
 	camp_radius = camp.radius()
+	if Game.stage_index < 2:
+		camp.stand_cloud(float(stage.get("heading", 150.0)))
 	plaza = camp.plaza
 
 	# The main fire, in the middle of the gathering ground.
@@ -543,6 +545,8 @@ func _next_objective() -> void:
 	obj = list[obj_index]
 	obj_need = int(obj.get("count", 1))
 	var ang := rng.randf() * TAU
+	if obj.has("bearing"):
+		ang = PI - deg_to_rad(float(obj["bearing"]))      # bearings run clockwise from north; ang 0 is south
 	var dist: float = float(obj.get("dist", 0.0))
 	var cx := sin(ang) * dist
 	var cz := cos(ang) * dist
@@ -804,6 +808,8 @@ func _shot() -> void:
 		player.yaw = deg_to_rad(float(args["yaw"]))
 	if args.has("pitch"):
 		player.pitch = deg_to_rad(float(args["pitch"]))
+	if args.has("arm"):
+		player._arm.spring_length = float(args["arm"])     # a long arm gives an overview from above
 	for i in int(args.get("frames", "90")):
 		await get_tree().process_frame
 	get_viewport().get_texture().get_image().save_png(str(args["shot"]))
@@ -972,7 +978,15 @@ func _selftest() -> void:
 			mid += p
 		if mid.x / w["outline"].size() < 0.0 and float(w["y"]) < 0.0:
 			west_water = true
-	check.call(west_water, "at Marah the Gulf of Suez lies to the west, below the camp")
+	check.call(west_water, "at the first camp the Gulf of Suez lies to the west, below the camp")
+	check.call(terrain.water_y(-285.0, 0.0) > -1e8 and terrain.water_y(-player.LIMIT, 0.0) < -1e8, "the shore is close by, just beyond where the scout can walk")
+	check.call(obj_pos.x > 0.0 and obj_pos.z > 0.0, "Marah lies ahead to the south-east (%s)" % obj_pos)
+	check.call(camp.guide != null and camp.guide.visible and camp.guide.position.z > 0.0, "the pillar of cloud stands by the camp on the way ahead")
+	var all_years := true
+	for st in Game.stage_count():
+		if str(Game.Stages.LIST[st].get("year", "")) == "":
+			all_years = false
+	check.call(all_years and str(stage["year"]) == "Year 1", "every stage carries its year, and the first is Year 1")
 	check.call(absf(terrain.surface_y(0.0, 0.0)) < 0.01 and absf(terrain.surface_y(8.0, -8.0)) < 0.05, "the camp stands on level ground")
 	check.call(scenery.counts["grass"] > 200 and scenery.counts["bushes"] > 30 and scenery.counts["trees"] >= 3 and scenery.counts["rocks"] > 100,
 		"the wilderness has grass, bushes, trees and rocks (%s)" % [scenery.counts])
@@ -983,7 +997,7 @@ func _selftest() -> void:
 	check.call(kinds.has("camp") and kinds.has("objective") and kinds.has("wild") and kinds.has("giver"), "the minimap marks the camp, the objective, wildlife and people needing help")
 	check.call(hud.minimap.offset_of(Vector3(50, 0, 0), Vector3.ZERO).x > 0.0 and hud.minimap.offset_of(Vector3(0, 0, -50), Vector3.ZERO).y < 0.0, "on the minimap east is right and north is up")
 	player.global_position = ground(0.0, 13.0) + Vector3(0, 0.2, 0)
-	check.call(hud.minimap.coordinates().begins_with("29.3"), "the minimap reads the camp's latitude (%s)" % hud.minimap.coordinates())
+	check.call(hud.minimap.coordinates().begins_with("29.60") or hud.minimap.coordinates().begins_with("29.61"), "the minimap reads the camp's latitude (%s)" % hud.minimap.coordinates())
 	await get_tree().process_frame
 	await get_tree().process_frame
 	check.call(hud.minimap.draws > 0, "the minimap draws without errors")
@@ -1013,7 +1027,8 @@ func _selftest() -> void:
 			badly_placed = true
 		nearest_total += nearest
 	check.call(not badly_placed, "no tent overlaps another or stands on the gathering ground")
-	check.call(nearest_total / camp.tents.size() < 4.5, "the tents are pitched close together (%.1f m apart on average)" % (nearest_total / camp.tents.size()))
+	check.call(nearest_total / camp.tents.size() < 3.0, "the tents are pitched close together (%.1f m apart on average)" % (nearest_total / camp.tents.size()))
+	print("tents stand %.1f m from their nearest neighbour on average" % (nearest_total / camp.tents.size()))
 	check.call(camp.tabernacle == null and camp.plaza == Vector3.ZERO, "before Sinai there is no tabernacle and the fire is the middle of the camp")
 	var linked := 0
 	for i in camp.nodes.size():
@@ -1245,6 +1260,9 @@ func _selftest() -> void:
 		check.call(is_instance_valid(exit_node), "stage %d shows the pillar of cloud" % (i + 1))
 		if i == 0:
 			check.call(Game.camp_has_water, "finding Marah fills the camp jars")
+			check.call(not camp.guide.visible, "the pillar of cloud moves on from the first camp when the stage is done")
+		if i == 1:
+			check.call(camp.tabernacle == null and camp.guide != null, "at Rephidim there is still no tabernacle, only the cloud")
 		if i >= 3:
 			check.call(not camp.cloud.visible, "stage %d: the cloud lifts from the tent when it is time to set out" % (i + 1))
 		if i == 2:

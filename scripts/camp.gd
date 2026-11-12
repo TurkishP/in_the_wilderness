@@ -15,7 +15,7 @@ extends Node3D
 const SceneryScript := preload("res://scripts/scenery.gd")
 const CUBIT := 0.457
 const COURT := Vector2(100.0 * CUBIT, 50.0 * CUBIT)     # east-west by north-south
-const GAP := 1.9              # least space between two tents
+const GAP := 1.4              # least space between two tents
 const PLAZA_RADIUS := 15.0
 const CLOTHS := [Color(0.86, 0.8, 0.68), Color(0.74, 0.62, 0.46), Color(0.6, 0.45, 0.33), Color(0.5, 0.38, 0.3), Color(0.82, 0.76, 0.6)]
 const DARKS := [Color(0.17, 0.14, 0.13), Color(0.24, 0.19, 0.16), Color(0.3, 0.24, 0.2)]
@@ -36,7 +36,8 @@ var nodes := PackedVector2Array()     # places people walk between
 var links: Array = []                 # for each node, the nodes it connects to
 var spots: Array = []                 # seated and working people: [{pos, look_at, pose, who, work, seat}]
 var tabernacle: Node3D
-var cloud: MeshInstance3D
+var cloud: MeshInstance3D            # over the tabernacle
+var guide: MeshInstance3D            # the pillar of cloud standing by the camp before there is a tabernacle
 var _site: Node3D
 var _lights := 0
 
@@ -99,9 +100,9 @@ func _reserved(p: Vector2, r: float) -> bool:
 	if absf(p.x - pl.x) < 4.0 + r and p.y > pl.y:
 		return true                                   # the way in from the south
 	if has_court:
-		if _in_court(p, 6.0 + r):
+		if _in_court(p, 4.0 + r):
 			return true
-		if p.x > 0.0 and absf(p.y) < 4.5 + r:
+		if p.x > 0.0 and absf(p.y) < 3.5 + r:
 			return true                               # the approach to the gate from the east
 		if absf(p.x) < 4.0 + r and p.y > 0.0 and p.y < pl.y:
 			return true                               # from the court to the plaza
@@ -111,9 +112,9 @@ func _reserved(p: Vector2, r: float) -> bool:
 # ================================================================ tents
 
 func _pitch_tents(rng: RandomNumberGenerator) -> void:
-	var wanted := 48 if has_court else 52
+	var wanted := 66 if has_court else 68
 	var tries := 0
-	while tents.size() < wanted and tries < 4000:
+	while tents.size() < wanted and tries < 12000:
 		tries += 1
 		var p := Vector2(rng.randf_range(-reach.x, reach.x), rng.randf_range(-reach.y, reach.y))
 		var roll := rng.randf()
@@ -318,6 +319,19 @@ func raise_tabernacle() -> void:
 func lift_cloud() -> void:
 	if cloud != null:
 		cloud.visible = false
+	if guide != null:
+		guide.visible = false
+
+
+## Before the tabernacle, the pillar of cloud stands at the edge of the camp on the side they
+## will travel (Exodus 13:21-22). `bearing` is in degrees clockwise from north.
+func stand_cloud(bearing: float) -> void:
+	var b := deg_to_rad(bearing)
+	var out := radius() + 16.0
+	guide = Game.mesh_cyl(8.0, 3.5, 150.0, Color(0.96, 0.96, 0.94), 0.35, 0.5)
+	guide.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	guide.position = Vector3(sin(b) * out, 75.0, -cos(b) * out)
+	add_child(guide)
 
 
 # ================================================================ life in the camp

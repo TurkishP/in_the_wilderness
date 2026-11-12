@@ -67,10 +67,12 @@ const WORK := {
 }
 
 const STAGES := [
-	# 1. Wilderness of Shur and Marah (Exodus 14-15)
+	# 1. Wilderness of Shur, two days from the sea (Exodus 12:34-39; 13:19-22; 14-15)
 	{
 		"any": [
-			"Three days since the sea, and not one well. My tongue is like leather.",
+			"Two days since the sea, and not one well. My tongue is like leather.",
+			"Look west. You can still see the water. I keep turning round to look.",
+			"They carry the bones of Joseph with us, as he made our fathers swear.",
 			"I still hear the sea closing over the chariots. I do not think I will ever stop hearing it.",
 			"We sang on the far shore until we were hoarse. Nobody is singing now.",
 			"The cloud goes ahead of us by day and the fire by night. So we follow.",
@@ -79,6 +81,7 @@ const STAGES := [
 			"My father made bricks, and his father before him. I do not know what I am now.",
 			"The flocks are suffering worse than we are. If we do not find water soon I will lose the ewes.",
 			"In Egypt we had water and no freedom. I would still not go back. Ask me again tomorrow.",
+			"The Egyptians gave us silver and gold as we left. What use is silver with no water?",
 		],
 		"woman": [
 			"Miriam and the women danced with timbrels on the shore, and I danced too. My feet remember, even with a dry throat.",
