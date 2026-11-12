@@ -24,7 +24,7 @@ func setup(defs: Array) -> void:
 		q["progress"] = 0
 		q["nodes"] = []
 		var x := (float(i) - float(n - 1) * 0.5) * 6.0
-		var pos: Vector3 = world.ground(x, 5.0)
+		var pos: Vector3 = world.plaza_point(x, 5.0)
 		var npc = world.spawn_npc(str(q["giver"]), "giver", pos, Color(0.5, 0.4, 0.58))
 		npc.quest = q
 		npc.set_mark("!")
@@ -129,18 +129,18 @@ func _start_gather(q: Dictionary) -> void:
 	var rng: RandomNumberGenerator = world.rng
 	var ang := rng.randf() * TAU
 	var count: int = int(q["count"])
-	var cx := sin(ang) * 70.0
-	var cz := cos(ang) * 70.0
+	var cx := sin(ang) * 105.0
+	var cz := cos(ang) * 105.0
 	q["hint"] = world.compass(cx, cz)
 	for i in count:
-		var p: Vector3 = world.ground(cx + rng.randf_range(-32.0, 32.0), cz + rng.randf_range(-32.0, 32.0))
+		var p: Vector3 = world.ground(cx + rng.randf_range(-30.0, 30.0), cz + rng.randf_range(-30.0, 30.0))
 		world.spawn_pickup("quest", int(q["index"]), p, str(q["item"]), q["color"])
 
 
 func _start_lost(q: Dictionary) -> void:
 	var rng: RandomNumberGenerator = world.rng
 	var ang := rng.randf() * TAU
-	var dist := rng.randf_range(95.0, 140.0)
+	var dist := rng.randf_range(115.0, 155.0)
 	var x := sin(ang) * dist
 	var z := cos(ang) * dist
 	q["hint"] = world.compass(x, z)
@@ -186,7 +186,7 @@ func _start_investigation(q: Dictionary) -> void:
 		per_side[side] = slot + 1
 		var p2: Vector2 = dir * 12.0 + across * (float(slot) * 3.0 - 3.0)
 		var who: String = "Man in a %s sash" % SASHES[t[0]]
-		var npc = world.spawn_npc(who, "suspect", world.ground(p2.x, p2.y), Color(0.45, 0.4, 0.33), {"sash_color": SASH_COLORS[t[0]]})
+		var npc = world.spawn_npc(who, "suspect", world.plaza_point(p2.x, p2.y), Color(0.45, 0.4, 0.33), {"sash_color": SASH_COLORS[t[0]]})
 		npc.quest = q
 		npc.data = {
 			"culprit": i == 0,
@@ -196,7 +196,7 @@ func _start_investigation(q: Dictionary) -> void:
 		if i == 0:
 			q["culprit"] = npc
 	for i in 3:
-		var wp: Vector3 = world.ground(-5.0 + i * 5.0, -1.5)
+		var wp: Vector3 = world.plaza_point(-5.0 + i * 5.0, -5.5)
 		var w = world.spawn_npc("Witness", "witness", wp, Color(0.62, 0.5, 0.38))
 		w.quest = q
 		w.data = {"clue": i}

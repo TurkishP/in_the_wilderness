@@ -53,8 +53,9 @@ func start_raid() -> void:
 	var size: int = int(cfg["size"]) + int(floor((count - 1) * 0.7))
 	var mult: float = float(world.stage["mult"]) * (1.0 + 0.12 * (count - 1))
 	var ang: float = world.rng.randf() * TAU
-	var ox := sin(ang) * 85.0
-	var oz := cos(ang) * 85.0
+	var far: float = float(world.camp_radius) + 62.0
+	var ox := sin(ang) * far
+	var oz := cos(ang) * far
 	for i in size:
 		var kind: String = cfg["kind"]
 		if bool(cfg.get("slingers", false)) and i % 3 == 2:

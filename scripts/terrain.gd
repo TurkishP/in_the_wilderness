@@ -6,7 +6,7 @@ extends StaticBody3D
 ## raised by half, so the sea and the mountains stand where they do at that place:
 ##
 ##   - the ground: 600 m square, 5 m cells, with dunes added and collision. The camp at its
-##     centre sits on a level patch.
+##     centre sits on a level patch 60 m across each way.
 ##   - the backdrop: 5 km square, 50 m cells, no collision. It joins the ground without a seam
 ##     because both take their edge heights from the same samples.
 ##   - water: each sea in view, cut to the backdrop and laid at its own level.
@@ -106,8 +106,8 @@ func regional(x: float, z: float) -> float:
 func _ground(x: float, z: float) -> float:
 	var d := Vector2(x, z).length()
 	var edge := maxf(absf(x), absf(z))
-	var settle := smoothstep(30.0, 110.0, d)
-	var rise := smoothstep(30.0, 70.0, d) * (1.0 - smoothstep(HALF - 60.0, HALF - 5.0, edge))
+	var settle := smoothstep(62.0, 140.0, d)
+	var rise := smoothstep(64.0, 104.0, d) * (1.0 - smoothstep(HALF - 60.0, HALF - 5.0, edge))
 	var dunes := (_dunes.get_noise_2d(x, z) + _dunes.get_noise_2d(x * 3.1 + 500.0, z * 3.1) * 0.25) * _amp
 	return regional(x, z) * settle + dunes * rise
 

@@ -28,6 +28,8 @@ const HudScript := preload("res://scripts/hud.gd")
 const HumanScript := preload("res://scripts/human.gd")
 const SceneryScript := preload("res://scripts/scenery.gd")
 const RegionScript := preload("res://data/region.gd")
+const CampScript := preload("res://scripts/camp.gd")
+const TalkScript := preload("res://data/talk.gd")
 
 const COMPASS := ["north", "north-east", "east", "south-east", "south", "south-west", "west", "north-west"]
 
@@ -41,8 +43,11 @@ var stage := {}
 var stage_root: Node3D
 var rng := RandomNumberGenerator.new()
 var look_rng := RandomNumberGenerator.new()   # appearance of camp people; separate so it never shifts the layout
-var camp_pos := Vector3.ZERO
-var camp_radius := 24.0
+var camp
+var camp_pos := Vector3.ZERO      # the middle of the camp
+var camp_radius := 48.0           # how far out the tents reach
+var plaza := Vector3.ZERO         # the middle of the gathering ground
+var villagers: Array = []
 var obj := {}
 var obj_index := -1
 var obj_count := 0
@@ -178,13 +183,13 @@ func load_stage() -> void:
 	_build_camp()
 	scenery = SceneryScript.new()
 	stage_root.add_child(scenery)
-	scenery.build(stage, rng, terrain)
+	scenery.build(stage, rng, terrain, camp_radius + 8.0)
 	hud.show_stage(terrain)
 
 	player = PlayerScript.new()
 	player.world = self
 	stage_root.add_child(player)
-	player.global_position = ground(0.0, 13.0) + Vector3(0, 0.5, 0)
+	player.global_position = plaza_point(0.0, 13.0) + Vector3(0, 0.5, 0)
 
 	_spawn_wildlife()
 	quests = QuestScript.new()
@@ -244,8 +249,8 @@ func spawn_npc(npc_name: String, role: String, pos: Vector3, color: Color, opts:
 	n.setup(npc_name, role, color, opts)
 	stage_root.add_child(n)
 	n.global_position = pos
-	# Face the middle of the camp.
-	n.rotation.y = atan2(pos.x, pos.z)
+	# Face the middle of the gathering ground.
+	n.rotation.y = atan2(pos.x - plaza.x, pos.z - plaza.z)
 	return n
 
 
@@ -294,46 +299,113 @@ func _tent(pos: Vector3, angle: float, color: Color) -> void:
 
 
 func _build_camp() -> void:
-	var cloths := [Color(0.86, 0.8, 0.68), Color(0.62, 0.46, 0.33), Color(0.76, 0.63, 0.46), Color(0.5, 0.38, 0.3)]
-	for i in 12:
-		var ang := TAU * i / 12.0 + 0.26
-		var r := 21.0 + rng.randf_range(-1.0, 2.5)
-		if cos(ang) > 0.8:
-			continue   # leave the south side open, where the player enters
-		_tent(ground(sin(ang) * r, cos(ang) * r), ang, cloths[i % cloths.size()])
+	camp = CampScript.new()
+	camp.world = self
+	stage_root.add_child(camp)
+	camp.build(Game.stage_index, rng)
+	camp_radius = camp.radius()
+	plaza = camp.plaza
 
+	# The main fire, in the middle of the gathering ground.
 	var fire := Game.mesh_cyl(0.0, 0.5, 1.1, Color(1.0, 0.5, 0.1), 3.0)
 	stage_root.add_child(fire)
-	fire.global_position = Vector3(0, 0.55, 0)
+	fire.global_position = plaza + Vector3(0, 0.55, 0)
 	for i in 7:
 		var st := Game.mesh_sphere(0.25, Color(0.35, 0.32, 0.3))
 		stage_root.add_child(st)
-		st.global_position = Vector3(sin(TAU * i / 7.0) * 0.85, 0.1, cos(TAU * i / 7.0) * 0.85)
+		st.global_position = plaza + Vector3(sin(TAU * i / 7.0) * 0.85, 0.1, cos(TAU * i / 7.0) * 0.85)
 	var glow := OmniLight3D.new()
 	glow.light_color = Color(1.0, 0.6, 0.25)
 	glow.light_energy = 2.0
 	glow.omni_range = 9.0
 	stage_root.add_child(glow)
-	glow.global_position = Vector3(0, 1.4, 0)
+	glow.global_position = plaza + Vector3(0, 1.4, 0)
 
 	for i in 4:
 		var jar := Game.mesh_cyl(0.28, 0.4, 0.9, Color(0.66, 0.42, 0.3))
 		stage_root.add_child(jar)
-		jar.global_position = Vector3(5.5 + (i % 2) * 0.9, 0.45, -4.5 + (i / 2) * 0.9)
-	_water_jars = _interactable("", Vector3(6.0, 0.5, -4.0), 3.2, _use_water_jars)
+		jar.global_position = plaza + Vector3(5.5 + (i % 2) * 0.9, 0.45, -4.5 + (i / 2) * 0.9)
+	_water_jars = _interactable("", plaza + Vector3(6.0, 0.5, -4.0), 3.2, _use_water_jars)
 	_refresh_water_jars()
 
-	spawn_npc("Captain of the scouts", "captain", Vector3(0, 0, -8.0), Color(0.3, 0.38, 0.5))
-	spawn_npc("Caravan trader", "merchant", Vector3(-8.5, 0, -3.5), Color(0.6, 0.3, 0.25))
-	spawn_npc("Camp craftsman", "smith", Vector3(-8.5, 0, 2.5), Color(0.4, 0.35, 0.3))
+	spawn_npc("Captain of the scouts", "captain", plaza + Vector3(0, 0, -8.0), Color(0.3, 0.38, 0.5))
+	spawn_npc("Caravan trader", "merchant", plaza + Vector3(-8.5, 0, -3.5), Color(0.6, 0.3, 0.25))
+	spawn_npc("Camp craftsman", "smith", plaza + Vector3(-8.5, 0, 2.5), Color(0.4, 0.35, 0.3))
 	var anvil := Game.mesh_box(Vector3(0.9, 0.6, 0.6), Color(0.3, 0.3, 0.32))
 	stage_root.add_child(anvil)
-	anvil.global_position = Vector3(-10.2, 0.3, 2.5)
-	var robes := [Color(0.7, 0.62, 0.5), Color(0.55, 0.5, 0.42), Color(0.72, 0.55, 0.42), Color(0.5, 0.45, 0.5)]
-	for i in 8:
-		var a := rng.randf_range(0.8, TAU - 0.8)   # keep clear of the south side, where the player enters
-		var r := rng.randf_range(9.0, 15.0)
-		spawn_npc("", "villager", Vector3(sin(a) * r, 0, cos(a) * r), robes[i % robes.size()], {"solid": false})
+	anvil.global_position = plaza + Vector3(-10.2, 0.3, 2.5)
+	_people()
+
+
+## A point on the gathering ground, given relative to its middle.
+func plaza_point(x: float, z: float) -> Vector3:
+	return ground(plaza.x + x, plaza.z + z)
+
+
+## The ordinary people of the camp: those sitting by the fire or at their work, and men,
+## women and children on foot among the tents.
+func _people() -> void:
+	villagers = []
+	var robes := [Color(0.72, 0.6, 0.42), Color(0.5, 0.42, 0.34), Color(0.62, 0.36, 0.26), Color(0.4, 0.42, 0.5),
+		Color(0.8, 0.74, 0.6), Color(0.46, 0.48, 0.3), Color(0.56, 0.3, 0.32), Color(0.34, 0.36, 0.44)]
+	for i in camp.spots.size():
+		var s: Dictionary = camp.spots[i]
+		var who: String = s["who"]
+		var old := look_rng.randf() < 0.3
+		var opts := {"solid": false, "sex": 0 if who == "man" else 1}
+		if old:
+			opts["hair_color"] = 4
+		var n = spawn_npc(_title(who, opts["sex"], old), "villager", s["pos"], robes[i % robes.size()], opts)
+		n.data = {"who": who, "work": s["work"]}
+		n.face(s["look_at"])
+		n.settle(str(s["pose"]), bool(s["seat"]))
+		villagers.append(n)
+	var walkers := ["man", "woman", "child", "man", "woman", "child", "man", "woman", "child", "man", "woman", "child"]
+	for i in walkers.size():
+		var start: int = camp.random_node(rng)
+		if start < 0:
+			break
+		var who: String = walkers[i]
+		var sex := look_rng.randi() % 2 if who == "child" else (0 if who == "man" else 1)
+		var old := who != "child" and look_rng.randf() < 0.2
+		var opts := {"solid": false, "sex": sex}
+		var pace := look_rng.randf_range(1.1, 1.5)
+		if who == "child":
+			opts.merge({"scale": look_rng.randf_range(0.55, 0.68), "beard": 0, "head": 0, "outfit": 0})
+			pace = look_rng.randf_range(1.9, 2.8)
+		if old:
+			opts["hair_color"] = 4
+			pace *= 0.8
+		var n = spawn_npc(_title(who, sex, old), "villager", camp.node_position(start), robes[(i + 3) % robes.size()], opts)
+		n.data = {"who": who, "work": ""}
+		n.start_walking(camp, start, pace, int(stage["seed"]) * 100 + i)
+		villagers.append(n)
+
+
+func _title(who: String, sex: int, old: bool) -> String:
+	if who == "child":
+		return "A girl" if sex == 1 else "A boy"
+	if who == "woman":
+		return "An old woman" if old else "A woman"
+	return "An old man" if old else "A man"
+
+
+## A villager says the next thing on their mind. They go through everything they have to say
+## before repeating themselves.
+func _talk(npc) -> void:
+	var lines: Array = npc.data.get("lines", [])
+	if lines.is_empty():
+		lines = TalkScript.lines_for(Game.stage_index, str(npc.data["who"]), str(npc.data.get("work", "")))
+		for i in range(lines.size() - 1, 0, -1):
+			var j := Game.rng.randi() % (i + 1)
+			var keep = lines[i]
+			lines[i] = lines[j]
+			lines[j] = keep
+	var line: String = lines.pop_back()
+	npc.data["lines"] = lines
+	if not npc.settled:
+		npc.face(player.global_position)
+	hud.dialog(npc.npc_name, "\"%s\"" % line)
 
 
 func _refresh_water_jars() -> void:
@@ -445,7 +517,7 @@ func _spawn_wildlife() -> void:
 	for kind in wild:
 		for i in int(wild[kind]):
 			var a := rng.randf() * TAU
-			var r := rng.randf_range(48.0, 195.0)
+			var r := rng.randf_range(camp_radius + 18.0, 195.0)
 			spawn_enemy(str(kind), ground(sin(a) * r, cos(a) * r), mult)
 
 
@@ -549,6 +621,7 @@ func _complete_objective() -> void:
 			_refresh_water_jars()
 		"workshop":
 			Game.workshop = true
+			camp.raise_tabernacle()
 	var reward := int(25.0 * float(stage["mult"]))
 	Game.silver += reward
 	hud.dialog(str(obj["text"]), "%s\n\n[i]The camp gives you %d silver.[/i]" % [obj["done"], reward], [["Continue", _next_objective]])
@@ -559,7 +632,8 @@ func _finish_stage() -> void:
 	raid.stopped = true
 	obj = {}
 	var ang := rng.randf() * TAU
-	var pos := ground(sin(ang) * 60.0, cos(ang) * 60.0)
+	var pos := ground(sin(ang) * (camp_radius + 38.0), cos(ang) * (camp_radius + 38.0))
+	camp.lift_cloud()
 	var cloud := Game.mesh_cyl(8.0, 4.0, 160.0, Color(0.97, 0.97, 0.95), 0.4, 0.55)
 	cloud.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	stage_root.add_child(cloud)
@@ -624,7 +698,7 @@ func on_player_died() -> void:
 func _respawn() -> void:
 	Game.hp = Game.max_hp * 0.6
 	Game.thirst = maxf(Game.thirst, 60.0)
-	player.revive(ground(0.0, 10.0) + Vector3(0, 0.5, 0))
+	player.revive(plaza_point(0.0, 10.0) + Vector3(0, 0.5, 0))
 
 
 func get_markers() -> Array:
@@ -632,7 +706,7 @@ func get_markers() -> Array:
 	if not is_instance_valid(player):
 		return out
 	var gold := Color(1.0, 0.9, 0.55)
-	if player.global_position.distance_to(camp_pos) > 45.0:
+	if player.global_position.distance_to(camp_pos) > camp_radius + 12.0:
 		out.append({"pos": camp_pos + Vector3(0, 4, 0), "text": "Camp", "color": Color(0.8, 0.95, 1.0)})
 	if stage_done:
 		if is_instance_valid(exit_node):
@@ -691,6 +765,8 @@ func npc_interact(npc) -> void:
 			hud.open_shop()
 		"smith":
 			hud.open_smith()
+		"villager":
+			_talk(npc)
 		"captain":
 			var t := objective_text()
 			if is_instance_valid(raid) and raid.active:
@@ -922,6 +998,74 @@ func _selftest() -> void:
 	check.call(not hud._map_panel.visible and not get_tree().paused, "the region map closes")
 	hud.auto = true
 
+	# The camp: close-packed tents of several kinds, ways through it, and people at home in it.
+	check.call(camp.tents.size() >= 40 and camp.kinds.size() >= 4, "the camp has many tents of several kinds (%d: %s)" % [camp.tents.size(), camp.kinds])
+	var badly_placed := false
+	var nearest_total := 0.0
+	for i in camp.tents.size():
+		var ti: Dictionary = camp.tents[i]
+		var nearest := 1e9
+		for j in camp.tents.size():
+			if i != j:
+				var tj: Dictionary = camp.tents[j]
+				nearest = minf(nearest, (ti["pos"] as Vector2).distance_to(tj["pos"]) - float(ti["r"]) - float(tj["r"]))
+		if nearest < camp.GAP - 0.01 or camp._reserved(ti["pos"], float(ti["r"])):
+			badly_placed = true
+		nearest_total += nearest
+	check.call(not badly_placed, "no tent overlaps another or stands on the gathering ground")
+	check.call(nearest_total / camp.tents.size() < 4.5, "the tents are pitched close together (%.1f m apart on average)" % (nearest_total / camp.tents.size()))
+	check.call(camp.tabernacle == null and camp.plaza == Vector3.ZERO, "before Sinai there is no tabernacle and the fire is the middle of the camp")
+	var linked := 0
+	for i in camp.nodes.size():
+		if camp.links[i].size() > 0:
+			linked += 1
+	check.call(linked > 40, "paths run through the camp (%d places, %d linked)" % [camp.nodes.size(), linked])
+	var who_count := {}
+	var seated := 0
+	for v in villagers:
+		who_count[v.data["who"]] = int(who_count.get(v.data["who"], 0)) + 1
+		if v.settled:
+			seated += 1
+	check.call(int(who_count.get("man", 0)) >= 4 and int(who_count.get("woman", 0)) >= 4 and int(who_count.get("child", 0)) >= 3, "men, women and children live in the camp (%s)" % [who_count])
+	check.call(seated == camp.spots.size() and seated >= 10, "people sit round the fire and kneel at their work (%d)" % seated)
+	var sitter = villagers[1]
+	var hips: float = sitter.figure.bone_position("pelvis").y
+	check.call(sitter.figure.posed and hips < 0.75, "someone sitting by the fire has their hips low (%.2f m)" % hips)
+	for v in villagers:
+		if str(v.data["work"]) == "grind":
+			var low := true
+			for k in 12:
+				v.figure._player.advance(0.5)
+				if v.figure.bone_position("pelvis").y > 0.6:
+					low = false
+			check.call(low, "someone kneeling at work stays down")
+	var works := {}
+	for sp in camp.spots:
+		works[sp["work"]] = true
+	check.call(works.has("weave") and works.has("spin") and works.has("arms") and works.has("cook") and works.has("grind") and works.has("fire"), "people weave, spin, make weapons, grind and cook")
+	var quote := char(34)
+	var talker = villagers[villagers.size() - 1]
+	var all_lines: Array = TalkScript.lines_for(0, str(talker.data["who"]))
+	npc_interact(talker)
+	var said: String = str(hud.last_dialog).trim_prefix(quote).trim_suffix(quote)
+	check.call(all_lines.has(said), "a villager says something fitting the stage (%s)" % said)
+	var heard := {said: true}
+	for k in all_lines.size() - 1:
+		npc_interact(talker)
+		heard[hud.last_dialog] = true
+	check.call(heard.size() == all_lines.size(), "a villager says everything once before repeating (%d of %d)" % [heard.size(), all_lines.size()])
+	for v in villagers:
+		if str(v.data["work"]) == "arms":
+			npc_interact(v)
+			var craft: String = str(hud.last_dialog).trim_prefix(quote).trim_suffix(quote)
+			check.call(TalkScript.lines_for(0, "man", "arms").has(craft), "the weapon maker can be spoken to (%s)" % craft)
+	var thin := ""
+	for st in TalkScript.STAGES.size():
+		for who in ["man", "woman", "child"]:
+			if TalkScript.lines_for(st, who).size() < 12:
+				thin += "%d/%s " % [st + 1, who]
+	check.call(thin == "", "every stage has plenty for men, women and children to say %s" % thin)
+
 	# World content.
 	check.call(get_tree().get_nodes_in_group("enemy").size() == 18, "stage 1 wildlife spawned")
 	check.call(player.global_position.y > -2.0 and player.global_position.y < 3.0, "the player stands on the ground")
@@ -944,6 +1088,23 @@ func _selftest() -> void:
 	# Real-time checks: the actual physics, input paths and AI, sped up six times.
 	Engine.time_scale = 6.0
 	raid.timer = 1e9
+	var stood: Array = []
+	for v in villagers:
+		stood.append(v.global_position)
+	await _wait(14.0)
+	var walked := 0
+	var through_tent := 0
+	for i in villagers.size():
+		var v = villagers[i]
+		if v.settled:
+			continue
+		if v.global_position.distance_to(stood[i]) > 1.0:
+			walked += 1
+		for t in camp.tents:
+			if Vector2(v.global_position.x, v.global_position.z).distance_to(t["pos"]) < float(t["r"]) * 0.5:
+				through_tent += 1
+	check.call(walked >= 8, "people walk about the camp (%d of 12 moved)" % walked)
+	check.call(through_tent == 0, "nobody walks through a tent")
 	var p0: Vector3 = ground(0.0, 13.0) + Vector3(0, 0.2, 0)
 	player.global_position = p0
 	player.yaw = PI          # face south, away from the tents
@@ -968,7 +1129,7 @@ func _selftest() -> void:
 	check.call(is_equal_approx(dummy.hp, dummy_hp - Game.sling_power()), "a swing misses an enemy behind and far away")
 	dummy.take_damage(1e9)
 
-	var p1: Vector3 = ground(0.0, 42.0) + Vector3(0, 0.3, 0)   # outside the camp, so no resting
+	var p1: Vector3 = ground(0.0, camp_radius + 30.0) + Vector3(0, 0.3, 0)   # outside the camp, so no resting
 	player.global_position = p1
 	await _wait(0.3)
 	var silver0 := Game.silver
@@ -1062,7 +1223,17 @@ func _selftest() -> void:
 		Game.stage_index = i
 		var load_started := Time.get_ticks_msec()
 		load_stage()
-		print("stage %2d built in %4d ms   scenery %s   waters %d" % [i + 1, Time.get_ticks_msec() - load_started, scenery.counts, terrain.waters.size()])
+		print("stage %2d built in %4d ms   tents %d %s   paths %d   people %d" % [i + 1, Time.get_ticks_msec() - load_started, camp.tents.size(), camp.kinds, camp.nodes.size(), villagers.size()])
+		if i == 2:
+			check.call(camp.tabernacle == null and camp.has_court, "at Sinai the ground for the tabernacle is marked out but it is not yet raised")
+		if i == 3:
+			check.call(camp.tabernacle != null and camp.cloud.visible and absf(camp.COURT.x - 45.7) < 0.01 and absf(camp.COURT.y - 22.85) < 0.01,
+				"from Paran on the tabernacle stands under the cloud, its court 100 by 50 cubits")
+			var in_court := 0
+			for v in villagers:
+				if absf(v.global_position.x) < camp.COURT.x * 0.5 and absf(v.global_position.z) < camp.COURT.y * 0.5:
+					in_court += 1
+			check.call(in_court == 0 and camp.plaza.z > 20.0, "the gathering ground lies south of the court and nobody stands inside it")
 		await get_tree().physics_frame
 		await get_tree().process_frame
 		var steps := 0
@@ -1074,8 +1245,11 @@ func _selftest() -> void:
 		check.call(is_instance_valid(exit_node), "stage %d shows the pillar of cloud" % (i + 1))
 		if i == 0:
 			check.call(Game.camp_has_water, "finding Marah fills the camp jars")
+		if i >= 3:
+			check.call(not camp.cloud.visible, "stage %d: the cloud lifts from the tent when it is time to set out" % (i + 1))
 		if i == 2:
 			check.call(Game.max_plus() == 5, "the workshop unlocks +5")
+			check.call(camp.tabernacle != null, "the tabernacle is raised at Sinai once the wood is in")
 			var peak := 0.0
 			var peak_at := Vector2.ZERO
 			for kx in range(-14, 15):

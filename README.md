@@ -9,8 +9,11 @@ Built with Godot 4.7 and GDScript. The people are modelled, rigged low-poly char
 Quaternius' free CC0 kits, dressed in tunics, robes and headcloths that the game generates to
 fit them. Each stage's land is shaped from a model of the real region, so the sea and the
 mountains stand where they do at that camp, and it is strewn with rocks, dry grass, bushes and
-acacias. A round map in the corner shows your surroundings and position, and M opens a map of
-the whole journey. Everything needed is in the repository, so a fresh clone is ready to run.
+acacias. The camp is a close-packed spread of tents where men, women and children walk about,
+sit by the fire and work, and will tell you what is on their minds; from Sinai onward the
+tabernacle stands at its centre. A round map in the corner shows your surroundings and
+position, and M opens a map of the whole journey. Everything needed is in the repository, so a
+fresh clone is ready to run.
 
 **Status:** playable prototype. No sound, and the numbers are not yet balanced.
 
@@ -110,6 +113,7 @@ in order, then walking to the pillar of cloud.
 | [data/items.gd](data/items.gd) | Weapons, slings and armor |
 | [data/enemies.gd](data/enemies.gd) | Wildlife, raiders and bosses |
 | [data/region.gd](data/region.gd) | A coarse model of the Sinai, the Negev, Edom and Moab: mountain masses, ranges, the rift valley, coastlines |
+| [data/talk.gd](data/talk.gd) | What ordinary people in the camp say, stage by stage, with the passage each group of lines draws on |
 | [scripts/game.gd](scripts/game.gd) | Autoload `Game`: saved state, gear rules, save file, mesh helpers |
 | [scripts/world.gd](scripts/world.gd) | Builds a stage, runs the main objectives, holds the debug arguments and the self-test |
 | [scripts/quests.gd](scripts/quests.gd) | Side quests: gather items, find a lost child, investigate a wrongdoer |
@@ -119,6 +123,7 @@ in order, then walking to the pillar of cloud.
 | [scripts/retarget.gd](scripts/retarget.gd) | Converts the animation kit's clips to the character kit's skeleton when the game starts |
 | [scripts/terrain.gd](scripts/terrain.gd) | One stage's land: detailed ground, far backdrop and water, all taken from the region model |
 | [scripts/scenery.gd](scripts/scenery.gd) | Rocks, dry grass, bushes and acacias, drawn in batches |
+| [scripts/camp.gd](scripts/camp.gd) | The camp: tents, cooking fires, flocks, the tabernacle, places for people to sit and work, and the paths they walk |
 | [scripts/minimap.gd](scripts/minimap.gd) | The round map in the corner |
 | [scripts/region_map.gd](scripts/region_map.gd) | The map of the whole journey (M) |
 | [assets/characters/](assets/characters/) | Bodies, hair, textures and animations (CC0, see `LICENSE.txt` there) |
@@ -128,6 +133,34 @@ in order, then walking to the pillar of cloud.
 To add or change content, edit the tables in `data/`. A new stage is one more dictionary in
 `data/stages.gd`; the field list is in the comment at the top of that file. The five main
 objective types are `reach`, `collect`, `boss`, `defend` and `rescue`.
+
+### The camp
+
+`scripts/camp.gd` lays out the camp afresh for each stage.
+
+- **Tents:** about fifty, of five kinds (small ridge tents, long low tents of dark goat hair,
+  round tents, open shelters on poles, large family tents), in varied sizes, never less than
+  1.9 m apart. The gathering ground and the ways in are kept clear.
+- **Gathering ground:** the main fire, the trader, the craftsman, the captain and the people
+  with errands. Before Sinai it is the middle of the camp. Once the tabernacle stands it lies
+  just south of the court.
+- **The tabernacle:** built to the measures in Exodus 26-27 and 38 at full size (a cubit taken
+  as 0.457 m): a court of 100 by 50 cubits on sixty posts hung with linen, the gate with its
+  blue, purple and scarlet screen on the east, the tent of 30 by 10 by 10 cubits in the western
+  half, the bronze altar with its fire and the basin before it, and the cloud over the tent.
+  At Sinai the ground is only marked out; the tabernacle is raised when the stage's objective
+  (acacia wood for its frames) is done. From Paran on it stands from the start, and its cloud
+  lifts when the stage is finished. The linen is solid; the gate screen can be walked through.
+- **People:** five sit on logs round the main fire, and six are at work round the gathering
+  ground (weaving at a ground loom, spinning, grinding, cooking, sharpening weapons, mending
+  rope). Twelve more, men, women and children, walk the camp along paths that keep them out of
+  the tents and the court.
+
+Anyone can be spoken to. Their lines are in `data/talk.gd`: for each stage, things anyone might
+say and things a man, a woman or a child might say, plus lines about the work a person is doing
+and a few that fit any day. Each person says everything once, in a random order, before
+repeating. To add a line, append it to the right list; the comment beside each stage names the
+passage its lines draw on.
 
 ### The land
 
@@ -216,6 +249,8 @@ beyond scaling the head. The paid "Source" versions of the kits add more bodies 
 - Side quests, raids outside the recorded battles, and all side characters are invented.
   Invented characters have role names only ("a potter"), and biblical figures are given no
   invented lines.
+- What villagers say is invented, but what they refer to must be in the passage for that stage.
+  Where a line reports what a biblical figure said or did, it follows the text.
 
 ## Credits and licences
 

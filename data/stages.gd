@@ -59,7 +59,7 @@ const LIST := [
 		"wild": {"snake": 8, "scorpion": 8, "jackal": 4},
 		"raid": {"kind": "raider", "label": "Amalekite raiders", "size": 3, "interval": [85.0, 130.0]},
 		"objectives": [
-			{"type": "collect", "text": "Gather manna", "label": "Manna", "item": "Manna", "count": 8, "dist": 45.0, "spread": 22.0, "color": Color(0.97, 0.95, 0.88),
+			{"type": "collect", "text": "Gather manna", "label": "Manna", "item": "Manna", "count": 8, "dist": 90.0, "spread": 22.0, "color": Color(0.97, 0.95, 0.88),
 				"done": "Each family gathers what it needs, an omer a head. What is kept until morning breeds worms, so no one stores it. Only on the sixth day does a double portion keep for the Sabbath."},
 			{"type": "boss", "text": "Break the Amalekite attack", "boss": "Amalekite chief", "dist": 130.0, "guards": {"raider": 3},
 				"done": "Joshua fights in the valley while Moses stands on the hill with the staff of God. When his hands are raised, Israel prevails. Aaron and Hur hold them steady until sunset, and Amalek is overcome."},

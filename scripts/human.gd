@@ -48,7 +48,8 @@ const LEATHER := Color(0.36, 0.25, 0.16)
 ## Hair meshes by "hair" index. "" = no hair mesh.
 const HAIR_FILES := ["hair_buzzed", "hair_parted", "hair_long", "hair_buns", ""]
 
-const ANIMS := ["Idle", "Walk", "Jog_Fwd", "Sprint", "Sword_Attack", "Spell_Simple_Shoot", "Punch_Cross", "Death01"]
+const ANIMS := ["Idle", "Walk", "Jog_Fwd", "Sprint", "Sword_Attack", "Spell_Simple_Shoot", "Punch_Cross", "Death01",
+	"Sitting_Idle", "Sitting_Talking", "Fixing_Kneeling"]
 ## The strike animation is long; it is played faster so the blow lands quickly.
 const STRIKE_SPEED := 2.0
 ## The blade is furthest forward 0.46 s into the clip (measured), and the clip is 1.53 s long.
@@ -71,6 +72,7 @@ var head: BoneAttachment3D        # things worn on the head hang from this
 var hand_r: BoneAttachment3D      # the weapon hangs from this
 var garments: Array = []          # names of the generated clothing pieces, for checks
 var dead := false
+var posed := false               # holding a sitting or kneeling pose instead of standing and walking
 var _model: Node3D
 var _player: AnimationPlayer
 var _tree: AnimationTree
@@ -132,6 +134,7 @@ func build(l: Dictionary, opts: Dictionary = {}) -> void:
 	weapon_kind = "none"
 	garments = []
 	dead = false
+	posed = false
 	look = l.duplicate()
 	_opts = opts
 	var sex := _i("sex")
@@ -901,8 +904,11 @@ static func _library(sex: int, target: Skeleton3D) -> AnimationLibrary:
 		var src_sk: Skeleton3D = src.find_child("Skeleton3D", true, false)
 		var src_player: AnimationPlayer = src.find_child("AnimationPlayer", true, false)
 		var lib: AnimationLibrary = Retarget.convert(src_sk, src_player, target, ANIMS, "Armature/Skeleton3D")
-		for cycle_name in ["Idle", "Walk", "Jog_Fwd", "Sprint"]:
+		for cycle_name in ["Idle", "Walk", "Jog_Fwd", "Sprint", "Sitting_Idle", "Sitting_Talking"]:
 			lib.get_animation(cycle_name).loop_mode = Animation.LOOP_LINEAR
+		# The kneeling clip kneels down, works, and stands up again. People at work stay down:
+		# they use only its middle, where the hips are low and the hands are busy.
+		lib.add_animation("Kneeling_Work", _cut(lib.get_animation("Fixing_Kneeling"), 1.0, 4.0))
 		_libraries[sex] = lib
 		src.free()
 	return _libraries[sex]
@@ -922,6 +928,24 @@ static func pose_basis(anim: Animation, sk: Skeleton3D, bone: int, time: float) 
 		if track >= 0:
 			local = Basis(anim.rotation_track_interpolate(track, time))
 		out = out * local
+	return out
+
+
+## A stretch of an animation as a clip of its own, played forward and then back so it never jumps.
+static func _cut(a: Animation, from: float, to: float) -> Animation:
+	var out := Animation.new()
+	out.length = to - from
+	out.loop_mode = Animation.LOOP_PINGPONG
+	var steps := int(ceil((to - from) * 30.0))
+	for t in a.get_track_count():
+		var track := out.add_track(a.track_get_type(t))
+		out.track_set_path(track, a.track_get_path(t))
+		for k in steps + 1:
+			var time := minf(to - from, k / 30.0)
+			if a.track_get_type(t) == Animation.TYPE_ROTATION_3D:
+				out.rotation_track_insert_key(track, time, a.rotation_track_interpolate(t, from + time))
+			else:
+				out.position_track_insert_key(track, time, a.position_track_interpolate(t, from + time))
 	return out
 
 
@@ -988,7 +1012,7 @@ func _setup_animation(sex: int) -> void:
 
 ## Call every frame with the horizontal speed in metres per second (0 when standing).
 func animate(delta: float, speed: float) -> void:
-	if _tree == null or dead:
+	if _tree == null or dead or posed:
 		return
 	_speed = lerpf(_speed, speed, 1.0 - exp(-10.0 * delta))
 	_tree.set("parameters/walk/blend_position", _speed)
@@ -1031,3 +1055,19 @@ func revive() -> void:
 	_player.stop()
 	_tree.active = true
 	_speed = 0.0
+
+
+## Holds a looping pose (sitting, kneeling at work) instead of standing and walking.
+func pose(anim: String) -> void:
+	if _tree == null or not _player.has_animation(anim):
+		return
+	posed = true
+	_tree.active = false
+	_player.play(anim)
+	# Start part-way through, so people sitting together do not move as one.
+	_player.seek(randf() * _player.current_animation_length, true)
+
+
+## Where a bone is now, relative to the figure's feet and facing.
+func bone_position(bone: String) -> Vector3:
+	return _model.transform * skeleton.get_bone_global_pose(skeleton.find_bone(bone)).origin

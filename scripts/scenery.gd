@@ -7,7 +7,6 @@ extends Node3D
 ## [grass, bushes, trees, rocks], where 1.0 is an average stretch of wilderness.
 
 const SPREAD := 285.0     # plants are placed out to this distance from the camp
-const CLEAR := 30.0       # and never this close to it
 
 static var _rocks: Array = []
 static var _tuft: ArrayMesh
@@ -15,9 +14,11 @@ static var _bush: ArrayMesh
 static var _acacia: ArrayMesh
 
 var counts := {"grass": 0, "bushes": 0, "trees": 0, "rocks": 0, "solid": 0}
+var clear := 30.0         # nothing is placed this close to the middle of the camp
 
 
-func build(stage: Dictionary, rng: RandomNumberGenerator, terrain) -> void:
+func build(stage: Dictionary, rng: RandomNumberGenerator, terrain, keep_clear: float = 30.0) -> void:
+	clear = keep_clear
 	_make_meshes()
 	var veg: Array = stage.get("veg", [1.0, 1.0, 1.0, 1.0])
 	var rock_c: Color = stage["rock"]
@@ -98,7 +99,7 @@ func build(stage: Dictionary, rng: RandomNumberGenerator, terrain) -> void:
 func _spot(rng: RandomNumberGenerator, terrain, sink: float = 0.02) -> Vector3:
 	var a := rng.randf() * TAU
 	var r := sqrt(rng.randf()) * SPREAD
-	if r < CLEAR:
+	if r < clear:
 		return Vector3.INF
 	var x := sin(a) * r
 	var z := cos(a) * r
