@@ -1,0 +1,4 @@
+# Keep line endings the same on every system.
+* text=auto eol=lf
+*.cmd text eol=crlf
+*.png binary

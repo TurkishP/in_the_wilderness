@@ -1,0 +1,15 @@
+# Godot import cache and editor state (rebuilt by `godot --headless --path . --import`)
+.godot/
+
+# Export output
+/build/
+*.pck
+*.exe
+*.x86_64
+*.dmg
+
+# OS and editor noise
+.DS_Store
+Thumbs.db
+*.tmp
+*~
