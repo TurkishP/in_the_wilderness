@@ -128,7 +128,7 @@ func settle(pose_name: String, seat: bool) -> void:
 	if seat:
 		# Find where the hips have come to rest and slide a log in beneath them.
 		var hips: Vector3 = figure.bone_position("pelvis") * figure.scale
-		var log_mesh := Game.mesh_cyl(0.17, 0.19, 0.95, Color(0.38, 0.27, 0.17))
+		var log_mesh := Game.mesh_cyl(0.17, 0.19, 0.95, Color(0.38, 0.27, 0.17), "wood")
 		log_mesh.rotation.z = PI * 0.5
 		log_mesh.position = Vector3(hips.x, maxf(0.17, hips.y - 0.27), hips.z)
 		add_child(log_mesh)

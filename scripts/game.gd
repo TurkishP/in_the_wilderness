@@ -998,8 +998,26 @@ func _exit_tree() -> void:
 
 # ---------------------------------------------------------------- mesh helpers
 
-func mat(color: Color, emit: float = 0.0, alpha: float = 1.0) -> StandardMaterial3D:
-	var key := "%s|%.2f|%.2f" % [color.to_html(), emit, alpha]
+## What a thing is made of. A material of one of these has a texture and its relief laid over
+## its color. They are laid on by position (triplanar), so any mesh can take one without
+## texture coordinates of its own, and the pattern has the same size on a tent as on a cup.
+##   cloth   tent cloth: a coarse weave, unevenly banded like the strips it is sewn from
+##   hair    the dark goat-hair cloth of the long tents: coarser and rougher
+##   linen   fine cloth: hangings, bedding, banners
+##   basket  plaited reed and palm: baskets and mats
+##   wood    with the grain running along the piece
+##   clay    fired pots and jars
+##   stone
+##   metal   beaten bronze, gold and silver
+const SURFACES := ["cloth", "hair", "linen", "basket", "wood", "clay", "stone", "metal"]
+
+var _textures := {}
+
+
+## A plain material of `color`, or one made of `surface` (see SURFACES). `grain` is the axis of
+## the mesh (0, 1 or 2 for x, y, z) that the grain of wood runs along.
+func mat(color: Color, surface: String = "", emit: float = 0.0, alpha: float = 1.0, grain: int = 1) -> StandardMaterial3D:
+	var key := "%s|%s%d|%.2f|%.2f" % [color.to_html(), surface, grain if surface == "wood" else 0, emit, alpha]
 	if _mats.has(key):
 		return _mats[key]
 	var m := StandardMaterial3D.new()
@@ -1012,20 +1030,159 @@ func mat(color: Color, emit: float = 0.0, alpha: float = 1.0) -> StandardMateria
 	if alpha < 1.0:
 		m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 		m.cull_mode = BaseMaterial3D.CULL_DISABLED
+	if SURFACES.has(surface):
+		_lay(m, surface, grain)
 	_mats[key] = m
 	return m
 
 
-func mesh_box(size: Vector3, color: Color, emit: float = 0.0) -> MeshInstance3D:
+## Lays the texture of a surface on a material. The textures darken what they cover a little,
+## so the color is lifted by as much to keep the thing the color it was given.
+func _lay(m: StandardMaterial3D, surface: String, grain: int) -> void:
+	m.uv1_triplanar = true
+	m.uv1_triplanar_sharpness = 6.0
+	m.normal_enabled = true
+	var lift := 1.0
+	match surface:
+		"cloth", "hair", "linen", "basket":
+			# The weave is a small tile repeated closely. It is the detail layer, which has a
+			# scale of its own; under it broad uneven bands run level along the cloth.
+			m.detail_enabled = true
+			m.detail_blend_mode = BaseMaterial3D.BLEND_MODE_MUL
+			m.detail_uv_layer = BaseMaterial3D.DETAIL_UV_2
+			m.detail_albedo = _texture("weave")
+			m.detail_normal = _texture("weave_relief")
+			m.uv2_triplanar = true
+			m.uv2_triplanar_sharpness = 6.0
+			# Tiles to the metre; a tile is two threads each way.
+			m.uv2_scale = Vector3.ONE * float({"cloth": 26.0, "hair": 17.0, "linen": 46.0, "basket": 10.0}[surface])
+			m.normal_scale = float({"cloth": 0.8, "hair": 1.1, "linen": 0.45, "basket": 1.4}[surface])
+			m.roughness = 1.0
+			lift = 1.1
+			if surface != "basket":
+				m.albedo_texture = _texture("bands_deep" if surface == "hair" else "bands")
+				m.uv1_scale = Vector3(0.12, 0.6, 0.12)
+				lift = 1.2
+		"wood":
+			# One noise, drawn out along the piece and squeezed across it.
+			var scale := Vector3.ONE * 6.5
+			scale[clampi(grain, 0, 2)] = 0.8
+			m.albedo_texture = _texture("fibre")
+			m.normal_texture = _texture("fibre_relief")
+			m.normal_scale = 0.9
+			m.uv1_scale = scale
+			m.roughness = 0.85
+			lift = 1.2
+		"clay":
+			m.albedo_texture = _texture("speckle")
+			m.normal_texture = _texture("speckle_relief")
+			m.normal_scale = 0.35
+			m.uv1_scale = Vector3.ONE * 4.0
+			m.roughness = 0.9
+			lift = 1.08
+		"stone":
+			m.albedo_texture = _texture("rough")
+			m.normal_texture = _texture("speckle_relief")
+			m.normal_scale = 1.2
+			m.uv1_scale = Vector3.ONE * 1.8
+			m.roughness = 1.0
+			lift = 1.15
+		"metal":
+			m.albedo_texture = _texture("speckle")
+			m.normal_texture = _texture("speckle_relief")
+			m.normal_scale = 0.3
+			m.uv1_scale = Vector3.ONE * 7.0
+			m.metallic = 0.35
+			m.roughness = 0.5
+			lift = 1.08
+	var c := m.albedo_color
+	m.albedo_color = Color(minf(c.r * lift, 1.0), minf(c.g * lift, 1.0), minf(c.b * lift, 1.0), c.a)
+
+
+## The textures the surfaces are made from, each built the first time it is wanted.
+func _texture(id: String) -> Texture2D:
+	if not _textures.has(id):
+		match id:
+			"weave", "weave_relief":
+				_make_weave()
+			"bands":
+				_textures[id] = _noise(11, 0.02, 0.82)
+			"bands_deep":
+				_textures[id] = _noise(12, 0.02, 0.7)
+			"fibre":
+				_textures[id] = _noise(21, 0.035, 0.6)
+			"fibre_relief":
+				_textures[id] = _noise(21, 0.035, 0.0, 5.0)
+			"speckle":
+				_textures[id] = _noise(31, 0.07, 0.84)
+			"rough":
+				_textures[id] = _noise(31, 0.07, 0.68)
+			"speckle_relief":
+				_textures[id] = _noise(31, 0.07, 0.0, 4.0)
+	return _textures[id]
+
+
+## A tile of smooth noise that repeats without a seam: shades of grey from `low` to white, or,
+## given `relief`, the same noise as a normal map of that strength.
+func _noise(seed_value: int, frequency: float, low: float, relief: float = 0.0) -> NoiseTexture2D:
+	var n := FastNoiseLite.new()
+	n.seed = seed_value
+	n.frequency = frequency
+	n.fractal_octaves = 4
+	var t := NoiseTexture2D.new()
+	t.width = 256
+	t.height = 256
+	t.seamless = true
+	if relief > 0.0:
+		t.as_normal_map = true
+		t.bump_strength = relief
+	else:
+		var ramp := Gradient.new()
+		ramp.set_color(0, Color(low, low, low))
+		ramp.set_color(1, Color(1, 1, 1))
+		t.color_ramp = ramp
+	t.noise = n
+	return t
+
+
+## Woven cloth as a tile of two threads by two, in plain weave: each thread passes over one
+## and under the next. Made as how bright each point is, and as the relief of the threads.
+func _make_weave() -> void:
+	var n := 64
+	var half := n / 2
+	var shade := Image.create_empty(n, n, false, Image.FORMAT_RGB8)
+	var relief := Image.create_empty(n, n, false, Image.FORMAT_RGB8)
+	for y in n:
+		for x in n:
+			var across_upright := cos(((float(x % half) + 0.5) / half - 0.5) * PI)   # 1 on the middle of an upright thread
+			var across_level := cos(((float(y % half) + 0.5) / half - 0.5) * PI)     # 1 on the middle of a level one
+			var upright_on_top := ((x / half) + (y / half)) % 2 == 0
+			var h := 0.0
+			if upright_on_top:
+				h = maxf(across_upright * (0.6 + 0.4 * across_level), across_level * 0.4)
+			else:
+				h = maxf(across_level * (0.6 + 0.4 * across_upright), across_upright * 0.4)
+			var v := 0.78 + 0.22 * h
+			shade.set_pixel(x, y, Color(v, v, v))
+			relief.set_pixel(x, y, Color(h, h, h))
+	shade.generate_mipmaps()
+	relief.bump_map_to_normal_map(6.0)
+	relief.generate_mipmaps(true)
+	_textures["weave"] = ImageTexture.create_from_image(shade)
+	_textures["weave_relief"] = ImageTexture.create_from_image(relief)
+
+
+## A box. Made of wood, its grain runs along its longest side.
+func mesh_box(size: Vector3, color: Color, surface: String = "", emit: float = 0.0) -> MeshInstance3D:
 	var mi := MeshInstance3D.new()
 	var b := BoxMesh.new()
 	b.size = size
 	mi.mesh = b
-	mi.material_override = mat(color, emit)
+	mi.material_override = mat(color, surface, emit, 1.0, size.max_axis_index())
 	return mi
 
 
-func mesh_sphere(radius: float, color: Color, emit: float = 0.0) -> MeshInstance3D:
+func mesh_sphere(radius: float, color: Color, surface: String = "", emit: float = 0.0) -> MeshInstance3D:
 	var mi := MeshInstance3D.new()
 	var s := SphereMesh.new()
 	s.radius = radius
@@ -1033,11 +1190,12 @@ func mesh_sphere(radius: float, color: Color, emit: float = 0.0) -> MeshInstance
 	s.radial_segments = 16
 	s.rings = 8
 	mi.mesh = s
-	mi.material_override = mat(color, emit)
+	mi.material_override = mat(color, surface, emit)
 	return mi
 
 
-func mesh_cyl(top: float, bottom: float, height: float, color: Color, emit: float = 0.0, alpha: float = 1.0) -> MeshInstance3D:
+## A cylinder or cone standing on its end. Made of wood, its grain runs from end to end.
+func mesh_cyl(top: float, bottom: float, height: float, color: Color, surface: String = "", emit: float = 0.0, alpha: float = 1.0) -> MeshInstance3D:
 	var mi := MeshInstance3D.new()
 	var c := CylinderMesh.new()
 	c.top_radius = top
@@ -1045,7 +1203,7 @@ func mesh_cyl(top: float, bottom: float, height: float, color: Color, emit: floa
 	c.height = height
 	c.radial_segments = 12
 	mi.mesh = c
-	mi.material_override = mat(color, emit, alpha)
+	mi.material_override = mat(color, surface, emit, alpha)
 	return mi
 
 

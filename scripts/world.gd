@@ -365,7 +365,7 @@ func _tent(pos: Vector3, angle: float, color: Color) -> void:
 	var pm := PrismMesh.new()
 	pm.size = Vector3(3.6, 2.6, 4.4)
 	t.mesh = pm
-	t.material_override = Game.mat(color)
+	t.material_override = Game.mat(color, "hair")
 	stage_root.add_child(t)
 	t.global_position = pos + Vector3(0, 1.3, 0)
 	t.rotation.y = angle
@@ -383,11 +383,11 @@ func _build_camp() -> void:
 	plaza = camp.plaza
 
 	# The main fire, in the middle of the gathering ground.
-	var fire := Game.mesh_cyl(0.0, 0.5, 1.1, Color(1.0, 0.5, 0.1), 3.0)
+	var fire := Game.mesh_cyl(0.0, 0.5, 1.1, Color(1.0, 0.5, 0.1), "", 3.0)
 	stage_root.add_child(fire)
 	fire.global_position = plaza + Vector3(0, 0.55, 0)
 	for i in 7:
-		var st := Game.mesh_sphere(0.25, Color(0.35, 0.32, 0.3))
+		var st := Game.mesh_sphere(0.25, Color(0.35, 0.32, 0.3), "stone")
 		stage_root.add_child(st)
 		st.global_position = plaza + Vector3(sin(TAU * i / 7.0) * 0.85, 0.1, cos(TAU * i / 7.0) * 0.85)
 	var glow := OmniLight3D.new()
@@ -398,7 +398,7 @@ func _build_camp() -> void:
 	glow.global_position = plaza + Vector3(0, 1.4, 0)
 
 	for i in 4:
-		var jar := Game.mesh_cyl(0.28, 0.4, 0.9, Color(0.66, 0.42, 0.3))
+		var jar := Game.mesh_cyl(0.28, 0.4, 0.9, Color(0.66, 0.42, 0.3), "clay")
 		stage_root.add_child(jar)
 		jar.global_position = plaza + Vector3(5.5 + (i % 2) * 0.9, 0.45, -4.5 + (i / 2) * 0.9)
 	_water_jars = _interactable("", plaza + Vector3(6.0, 0.5, -4.0), 3.2, _use_water_jars)
@@ -407,7 +407,7 @@ func _build_camp() -> void:
 	spawn_npc("Captain of the scouts", "captain", plaza + Vector3(0, 0, -8.0), Color(0.3, 0.38, 0.5))
 	spawn_npc("Caravan trader", "merchant", plaza + Vector3(-8.5, 0, -3.5), Color(0.6, 0.3, 0.25))
 	spawn_npc("Camp craftsman", "smith", plaza + Vector3(-8.5, 0, 2.5), Color(0.4, 0.35, 0.3))
-	var anvil := Game.mesh_box(Vector3(0.9, 0.6, 0.6), Color(0.3, 0.3, 0.32))
+	var anvil := Game.mesh_box(Vector3(0.9, 0.6, 0.6), Color(0.3, 0.3, 0.32), "stone")
 	stage_root.add_child(anvil)
 	anvil.global_position = plaza + Vector3(-10.2, 0.3, 2.5)
 	_people()
@@ -620,7 +620,7 @@ func _scatter_stones() -> void:
 			ball.radial_segments = 6
 			ball.rings = 3
 			pebble.mesh = ball
-			pebble.material_override = Game.mat(Color(0.62, 0.58, 0.52).darkened(srng.randf() * 0.25))
+			pebble.material_override = Game.mat(Color(0.62, 0.58, 0.52).darkened(srng.randf() * 0.25), "stone")
 			spot.add_child(pebble)
 			pebble.position = Vector3(srng.randf_range(-0.45, 0.45), -0.27, srng.randf_range(-0.45, 0.45))
 			pebble.rotation.y = srng.randf() * TAU
@@ -644,7 +644,7 @@ func _gather_stones(node) -> void:
 
 
 func _palm(pos: Vector3) -> void:
-	var trunk := Game.mesh_cyl(0.16, 0.24, 6.0, Color(0.45, 0.34, 0.22))
+	var trunk := Game.mesh_cyl(0.16, 0.24, 6.0, Color(0.45, 0.34, 0.22), "wood")
 	stage_root.add_child(trunk)
 	trunk.global_position = pos + Vector3(0, 3.0, 0)
 	for i in 6:
@@ -662,12 +662,12 @@ func _site_label(text: String, pos: Vector3) -> void:
 
 
 func _site_spring(pos: Vector3, title: String) -> void:
-	var pool := Game.mesh_cyl(5.0, 5.0, 0.16, Color(0.2, 0.5, 0.6), 0.25)
+	var pool := Game.mesh_cyl(5.0, 5.0, 0.16, Color(0.2, 0.5, 0.6), "", 0.25)
 	stage_root.add_child(pool)
 	pool.global_position = pos + Vector3(0, 0.25, 0)
 	for i in 9:
 		var a := TAU * i / 9.0
-		var st := Game.mesh_sphere(rng.randf_range(0.5, 0.9), Color(0.5, 0.45, 0.4))
+		var st := Game.mesh_sphere(rng.randf_range(0.5, 0.9), Color(0.5, 0.45, 0.4), "stone")
 		stage_root.add_child(st)
 		st.global_position = pos + Vector3(sin(a) * 5.3, 0.2, cos(a) * 5.3)
 	for i in 5:
@@ -680,7 +680,7 @@ func _site_cairn(pos: Vector3, title: String) -> void:
 	var y := 0.0
 	for i in 5:
 		var s := 1.6 - i * 0.26
-		var st := Game.mesh_box(Vector3(s, 0.6, s), Color(0.5, 0.46, 0.42).darkened(i * 0.04))
+		var st := Game.mesh_box(Vector3(s, 0.6, s), Color(0.5, 0.46, 0.42).darkened(i * 0.04), "stone")
 		stage_root.add_child(st)
 		st.global_position = pos + Vector3(0, y + 0.3, 0)
 		st.rotation.y = i * 0.5
@@ -692,10 +692,10 @@ func _site_warcamp(pos: Vector3, title: String) -> void:
 	for i in 3:
 		var a := TAU * i / 3.0 + 1.0
 		_tent(ground(pos.x + sin(a) * 9.0, pos.z + cos(a) * 9.0), a, Color(0.28, 0.2, 0.2))
-	var pole := Game.mesh_cyl(0.07, 0.07, 6.0, Color(0.3, 0.22, 0.15))
+	var pole := Game.mesh_cyl(0.07, 0.07, 6.0, Color(0.3, 0.22, 0.15), "wood")
 	stage_root.add_child(pole)
 	pole.global_position = pos + Vector3(0, 3.0, 0)
-	var flag := Game.mesh_box(Vector3(1.6, 1.0, 0.05), Color(0.6, 0.1, 0.1))
+	var flag := Game.mesh_box(Vector3(1.6, 1.0, 0.05), Color(0.6, 0.1, 0.1), "cloth")
 	stage_root.add_child(flag)
 	flag.global_position = pos + Vector3(0.85, 5.3, 0)
 	_site_label(title, pos)
@@ -707,10 +707,10 @@ func _cage(pos: Vector3) -> void:
 	cage.global_position = pos
 	for cx in [-0.9, 0.9]:
 		for cz in [-0.9, 0.9]:
-			var post := Game.mesh_cyl(0.07, 0.07, 2.2, Color(0.35, 0.25, 0.16))
+			var post := Game.mesh_cyl(0.07, 0.07, 2.2, Color(0.35, 0.25, 0.16), "wood")
 			post.position = Vector3(cx, 1.1, cz)
 			cage.add_child(post)
-	var roof := Game.mesh_box(Vector3(2.1, 0.1, 2.1), Color(0.35, 0.25, 0.16))
+	var roof := Game.mesh_box(Vector3(2.1, 0.1, 2.1), Color(0.35, 0.25, 0.16), "wood")
 	roof.position.y = 2.2
 	cage.add_child(roof)
 	var captive = spawn_npc("", "villager", pos, Color(0.7, 0.62, 0.5), {"solid": false, "scale": 0.9})
@@ -1168,6 +1168,36 @@ func _selftest() -> void:
 	Game.take_stones(Game.START_STONES)
 	Game._gear_changed()
 	check.call(player.body.weapon_kind == "dagger" and player.body.offhand == null and player.body.garments.has("skirt_short"), "taking things off shows on the figure")
+
+	# What things are made of: every surface has its texture, cloth is woven, the grain of wood
+	# runs along the piece, and the camp's tents and poles are made of them.
+	var surfaces_ok := true
+	for surface in Game.SURFACES:
+		var made: StandardMaterial3D = Game.mat(Color(0.5, 0.4, 0.3), surface)
+		if not made.uv1_triplanar or not made.normal_enabled or (made.albedo_texture == null and made.detail_albedo == null):
+			surfaces_ok = false
+	check.call(surfaces_ok, "every surface has a texture laid on by position")
+	var canvas: StandardMaterial3D = Game.mat(Color(0.8, 0.7, 0.5), "cloth")
+	check.call(canvas.detail_enabled and canvas.detail_albedo.get_width() == 64 and canvas.detail_normal != null and canvas.uv2_triplanar and canvas.albedo_texture != null, "tent cloth is woven and banded")
+	var beam_part := Game.mesh_box(Vector3(2.0, 0.1, 0.3), Color(0.4, 0.28, 0.17), "wood")
+	var post_part := Game.mesh_cyl(0.05, 0.05, 2.0, Color(0.4, 0.28, 0.17), "wood")
+	var beam: StandardMaterial3D = beam_part.material_override
+	var post: StandardMaterial3D = post_part.material_override
+	check.call(beam.uv1_scale.x < beam.uv1_scale.y and post.uv1_scale.y < post.uv1_scale.x and beam != post, "the grain of wood runs along the piece")
+	beam_part.free()
+	post_part.free()
+	check.call(Game.mat(Color(0.5, 0.4, 0.3)).albedo_texture == null and Game.mat(Color(0.5, 0.4, 0.3), "clay") == Game.mat(Color(0.5, 0.4, 0.3), "clay"), "plain materials stay plain, and equal ones are shared")
+	var woven := 0
+	var timbered := 0
+	for part in camp.find_children("*", "MeshInstance3D", true, false):
+		var of_what: StandardMaterial3D = part.material_override as StandardMaterial3D
+		if of_what == null:
+			continue
+		if of_what.detail_enabled and part.mesh is PrismMesh:
+			woven += 1
+		if of_what.albedo_texture == Game._texture("fibre"):
+			timbered += 1
+	check.call(woven >= 20 and timbered >= 20, "the camp's tents are of woven cloth and its poles of wood (%d and %d)" % [woven, timbered])
 
 	# Figures and the character creator.
 	var figures_ok := true

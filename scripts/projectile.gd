@@ -14,7 +14,7 @@ var _mesh: Node3D
 func _ready() -> void:
 	if arrow:
 		_mesh = Node3D.new()
-		var shaft := Game.mesh_cyl(0.007, 0.007, 0.72, Color(0.62, 0.5, 0.32))
+		var shaft := Game.mesh_cyl(0.007, 0.007, 0.72, Color(0.62, 0.5, 0.32), "wood")
 		shaft.position.y = -0.36
 		_mesh.add_child(shaft)
 		var head := Game.mesh_cyl(0.0, 0.016, 0.07, Color(0.5, 0.5, 0.52))

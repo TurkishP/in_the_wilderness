@@ -246,6 +246,30 @@ and the position as it would read on a real map.
 To move a camp, change its `site`. To reshape the country, edit the tables in `data/region.gd`
 and compare `Region.elevation()` with known heights (the self-test has examples).
 
+### What things are made of
+
+Tents and props are still simple shapes, but each is made of something. The mesh helpers in
+`scripts/game.gd` take a surface after the color, for example
+`Game.mesh_cyl(0.05, 0.05, 2.0, WOOD, "wood")` or `Game.mat(color, "cloth")`:
+
+| Surface | Looks like | Used for |
+|---|---|---|
+| `cloth` | a coarse weave, unevenly banded like sewn strips | tents, rugs, blankets, flags |
+| `hair` | the same weave, coarser and rougher | the dark goat-hair tents, the tabernacle's covering |
+| `linen` | a fine weave | the court hangings, the gate screen, bedding |
+| `basket` | broad plaited strands | baskets and mats |
+| `wood` | grain running along the piece | poles, barrels, tables, the loom, the chest, the bed |
+| `clay` | fine speckle | pots, jars and lamps |
+| `stone` | rough speckle | hearth stones, querns, cairns, pebbles |
+| `metal` | lightly beaten, a little shiny | bronze posts, the altar and basin, gold boards, blades |
+
+The textures are made in code the first time they are wanted (`Game._texture()`): the weave is
+a small tile of two threads by two, and the rest are tiles of noise. They are laid on by
+position (triplanar), so a mesh needs no texture coordinates and the pattern is the same size
+on a tent as on a cup. Wood uses one noise drawn out along the piece and squeezed across it;
+a box takes its longest side as the direction of the grain, a cylinder its length. There are
+still no custom shaders: every material is a `StandardMaterial3D`.
+
 ### Characters
 
 Every person is the same figure from `scripts/human.gd`, driven by a "look": a dictionary of
@@ -347,6 +371,6 @@ Settings (volume, mouse, field of view, screen) are kept in `settings.cfg` in th
 - Clothing is simple: plain colors, no textures or folds.
 - Shields do not block; they add defense.
 - The land is a coarse model, not survey data. Water is a flat sheet. Tents and camp props are
-  still simple shapes, and animals are still built from boxes.
+  still simple shapes under their textures, and animals are still built from boxes.
 - Balance. Damage, prices and timings are first guesses and have not been tuned by play.
 - Stages 2 to 10 reuse the stage-1 building blocks with different data and need hand tuning.

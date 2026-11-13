@@ -171,24 +171,24 @@ func _tent(kind: String, p: Vector2, angle: float, s: float, rng: RandomNumberGe
 			var size := Vector3(2.9 * s, 2.1 * s, 3.7 * s)
 			var prism := PrismMesh.new()
 			prism.size = size
-			_add(node, _mesh(prism, cloth), Vector3(0, size.y * 0.5, 0))
+			_add(node, _mesh(prism, cloth, "cloth"), Vector3(0, size.y * 0.5, 0))
 			_solid(node, Vector3(size.x * 0.85, size.y, size.z), Vector3(0, size.y * 0.5, 0))
 		"black":
 			# The long, low tent of dark goat hair, with upright walls and a shallow roof.
 			var w := 5.8 * s
 			var d := 3.4 * s
-			_add(node, Game.mesh_box(Vector3(w, 1.15, d), dark), Vector3(0, 0.575, 0))
+			_add(node, Game.mesh_box(Vector3(w, 1.15, d), dark, "hair"), Vector3(0, 0.575, 0))
 			var roof := PrismMesh.new()
 			roof.size = Vector3(d + 0.5, 0.85, w + 0.7)
-			_add(node, _mesh(roof, dark.lightened(0.06)), Vector3(0, 1.15 + 0.425, 0), Vector3(0, PI * 0.5, 0))
+			_add(node, _mesh(roof, dark.lightened(0.06), "hair"), Vector3(0, 1.15 + 0.425, 0), Vector3(0, PI * 0.5, 0))
 			for k in 3:
-				_add(node, Game.mesh_cyl(0.045, 0.045, 1.7, WOOD), Vector3((k - 1) * w * 0.4, 0.85, d * 0.5 + 0.35))
+				_add(node, Game.mesh_cyl(0.045, 0.045, 1.7, WOOD, "wood"), Vector3((k - 1) * w * 0.4, 0.85, d * 0.5 + 0.35))
 			_solid(node, Vector3(w, 2.0, d), Vector3(0, 1.0, 0))
 		"round":
 			var rad := 1.9 * s
 			var h := 2.9 * s
-			_add(node, Game.mesh_cyl(0.07, rad, h, cloth), Vector3(0, h * 0.5, 0))
-			_add(node, Game.mesh_cyl(0.03, 0.03, 0.5, WOOD), Vector3(0, h + 0.2, 0))
+			_add(node, Game.mesh_cyl(0.07, rad, h, cloth, "cloth"), Vector3(0, h * 0.5, 0))
+			_add(node, Game.mesh_cyl(0.03, 0.03, 0.5, WOOD, "wood"), Vector3(0, h + 0.2, 0))
 			_solid(node, Vector3(rad * 1.5, h, rad * 1.5), Vector3(0, h * 0.5, 0))
 		"booth":
 			# An open shelter: a cloth roof on four poles, for shade and for work.
@@ -196,16 +196,16 @@ func _tent(kind: String, p: Vector2, angle: float, s: float, rng: RandomNumberGe
 			for cx in [-1.0, 1.0]:
 				for cz in [-1.0, 1.0]:
 					var h: float = 2.2 if cz < 0.0 else 1.9
-					_add(node, Game.mesh_cyl(0.05, 0.05, h, WOOD), Vector3(cx * w * 0.47, h * 0.5, cz * w * 0.47))
-			_add(node, Game.mesh_box(Vector3(w + 0.3, 0.06, w + 0.3), cloth.darkened(0.1)), Vector3(0, 2.08, 0), Vector3(0.1, 0, 0))
+					_add(node, Game.mesh_cyl(0.05, 0.05, h, WOOD, "wood"), Vector3(cx * w * 0.47, h * 0.5, cz * w * 0.47))
+			_add(node, Game.mesh_box(Vector3(w + 0.3, 0.06, w + 0.3), cloth.darkened(0.1), "cloth"), Vector3(0, 2.08, 0), Vector3(0.1, 0, 0))
 		"long":
 			# A large tent for a big household, with two poles through the ridge.
 			var size := Vector3(3.5 * s, 2.5 * s, 7.2 * s)
 			var prism := PrismMesh.new()
 			prism.size = size
-			_add(node, _mesh(prism, cloth), Vector3(0, size.y * 0.5, 0))
+			_add(node, _mesh(prism, cloth, "cloth"), Vector3(0, size.y * 0.5, 0))
 			for k in [-1.0, 1.0]:
-				_add(node, Game.mesh_cyl(0.04, 0.04, 0.5, WOOD), Vector3(0, size.y + 0.15, k * size.z * 0.3))
+				_add(node, Game.mesh_cyl(0.04, 0.04, 0.5, WOOD, "wood"), Vector3(0, size.y + 0.15, k * size.z * 0.3))
 			_solid(node, Vector3(size.x * 0.85, size.y, size.z), Vector3(0, size.y * 0.5, 0))
 
 
@@ -223,23 +223,23 @@ func _build_home() -> void:
 	var size := Vector3(4.0, 2.8, 5.0)
 	var prism := PrismMesh.new()
 	prism.size = size
-	_add(node, _mesh(prism, cloth), Vector3(0, size.y * 0.5, 0))
+	_add(node, _mesh(prism, cloth, "cloth"), Vector3(0, size.y * 0.5, 0))
 	# Woven bands of red and blue across both slopes.
 	for k in 3:
 		var band := PrismMesh.new()
 		band.size = Vector3(size.x + 0.04, size.y + 0.02, 0.22)
-		_add(node, _mesh(band, stripe if k != 1 else Color(0.2, 0.28, 0.5)), Vector3(0, size.y * 0.5, -1.6 + k * 1.6))
+		_add(node, _mesh(band, stripe if k != 1 else Color(0.2, 0.28, 0.5), "cloth"), Vector3(0, size.y * 0.5, -1.6 + k * 1.6))
 	# The doorway: a dark opening with the flap rolled up above it.
 	var door := PrismMesh.new()
 	door.size = Vector3(1.3, 1.9, 0.06)
 	_add(node, _mesh(door, Color(0.12, 0.09, 0.07)), Vector3(0, 0.95, size.z * 0.5 + 0.01))
-	_add(node, Game.mesh_cyl(0.09, 0.09, 1.4, cloth.darkened(0.15)), Vector3(0, 1.95, size.z * 0.5 + 0.06), Vector3(0, 0, PI * 0.5))
+	_add(node, Game.mesh_cyl(0.09, 0.09, 1.4, cloth.darkened(0.15), "cloth"), Vector3(0, 1.95, size.z * 0.5 + 0.06), Vector3(0, 0, PI * 0.5))
 	for side in [-1.0, 1.0]:
-		_add(node, Game.mesh_cyl(0.04, 0.04, 2.0, WOOD), Vector3(side * 0.75, 1.0, size.z * 0.5 + 0.35))
+		_add(node, Game.mesh_cyl(0.04, 0.04, 2.0, WOOD, "wood"), Vector3(side * 0.75, 1.0, size.z * 0.5 + 0.35))
 	# Ridge poles, and a pennant on the front one.
 	for k in [-1.0, 1.0]:
-		_add(node, Game.mesh_cyl(0.045, 0.045, 0.9, WOOD), Vector3(0, size.y + 0.3, k * size.z * 0.3))
-	var flag := Game.mesh_box(Vector3(0.03, 0.32, 0.55), Color(0.2, 0.28, 0.55))
+		_add(node, Game.mesh_cyl(0.045, 0.045, 0.9, WOOD, "wood"), Vector3(0, size.y + 0.3, k * size.z * 0.3))
+	var flag := Game.mesh_box(Vector3(0.03, 0.32, 0.55), Color(0.2, 0.28, 0.55), "linen")
 	_add(node, flag, Vector3(0, size.y + 0.6, size.z * 0.3 + 0.3))
 	_solid(node, Vector3(size.x * 0.85, size.y, size.z), Vector3(0, size.y * 0.5, 0))
 	var sign := Game.label3d("Your tent", 64, Color(1.0, 0.92, 0.7))
@@ -278,37 +278,37 @@ func _water_station(kind: String, at: Vector3, rng: RandomNumberGenerator) -> vo
 	var water := Color(0.25, 0.45, 0.55)
 	if kind == "barrel":
 		# A staved barrel bound with dark hoops, its lid pushed aside, a dipper hanging on it.
-		_add(node, Game.mesh_cyl(0.36, 0.33, 0.95, wood), Vector3(0, 0.475, 0))
-		_add(node, Game.mesh_cyl(0.375, 0.375, 0.5, wood.darkened(0.06)), Vector3(0, 0.5, 0))
+		_add(node, Game.mesh_cyl(0.36, 0.33, 0.95, wood, "wood"), Vector3(0, 0.475, 0))
+		_add(node, Game.mesh_cyl(0.375, 0.375, 0.5, wood.darkened(0.06), "wood"), Vector3(0, 0.5, 0))
 		for y in [0.12, 0.5, 0.86]:
 			_add(node, Game.mesh_cyl(0.385, 0.385, 0.05, Color(0.2, 0.16, 0.12)), Vector3(0, y, 0))
-		_add(node, Game.mesh_cyl(0.33, 0.33, 0.02, water, 0.15), Vector3(0, 0.9, 0))
-		_add(node, Game.mesh_cyl(0.3, 0.3, 0.04, wood.darkened(0.1)), Vector3(0.22, 0.97, 0.12), Vector3(0.12, 0, 0.18))
-		_add(node, Game.mesh_cyl(0.015, 0.015, 0.45, wood.darkened(0.2)), Vector3(-0.3, 0.9, 0), Vector3(0, 0, 0.9))
-		_add(node, Game.mesh_sphere(0.06, wood.darkened(0.2)), Vector3(-0.47, 0.72, 0))
+		_add(node, Game.mesh_cyl(0.33, 0.33, 0.02, water, "", 0.15), Vector3(0, 0.9, 0))
+		_add(node, Game.mesh_cyl(0.3, 0.3, 0.04, wood.darkened(0.1), "wood"), Vector3(0.22, 0.97, 0.12), Vector3(0.12, 0, 0.18))
+		_add(node, Game.mesh_cyl(0.015, 0.015, 0.45, wood.darkened(0.2), "wood"), Vector3(-0.3, 0.9, 0), Vector3(0, 0, 0.9))
+		_add(node, Game.mesh_sphere(0.06, wood.darkened(0.2), "wood"), Vector3(-0.47, 0.72, 0))
 	else:
 		# A low table with a clay jug and three wooden cups.
-		_add(node, Game.mesh_box(Vector3(0.9, 0.06, 0.6), wood), Vector3(0, 0.42, 0))
+		_add(node, Game.mesh_box(Vector3(0.9, 0.06, 0.6), wood, "wood"), Vector3(0, 0.42, 0))
 		for cx in [-0.38, 0.38]:
 			for cz in [-0.24, 0.24]:
-				_add(node, Game.mesh_box(Vector3(0.06, 0.4, 0.06), wood.darkened(0.15)), Vector3(cx, 0.2, cz))
+				_add(node, Game.mesh_box(Vector3(0.06, 0.4, 0.06), wood.darkened(0.15), "wood"), Vector3(cx, 0.2, cz))
 		var clay := Color(0.7, 0.42, 0.28)
-		_add(node, Game.mesh_cyl(0.11, 0.16, 0.32, clay), Vector3(-0.2, 0.61, 0))
-		_add(node, Game.mesh_cyl(0.06, 0.1, 0.1, clay), Vector3(-0.2, 0.82, 0))
-		_add(node, Game.mesh_cyl(0.07, 0.06, 0.05, clay.darkened(0.1)), Vector3(-0.2, 0.9, 0))
-		_add(node, Game.mesh_box(Vector3(0.03, 0.2, 0.05), clay.darkened(0.1)), Vector3(-0.05, 0.66, 0), Vector3(0, 0, -0.3))
+		_add(node, Game.mesh_cyl(0.11, 0.16, 0.32, clay, "clay"), Vector3(-0.2, 0.61, 0))
+		_add(node, Game.mesh_cyl(0.06, 0.1, 0.1, clay, "clay"), Vector3(-0.2, 0.82, 0))
+		_add(node, Game.mesh_cyl(0.07, 0.06, 0.05, clay.darkened(0.1), "clay"), Vector3(-0.2, 0.9, 0))
+		_add(node, Game.mesh_box(Vector3(0.03, 0.2, 0.05), clay.darkened(0.1), "clay"), Vector3(-0.05, 0.66, 0), Vector3(0, 0, -0.3))
 		for k in 3:
-			_add(node, Game.mesh_cyl(0.05, 0.04, 0.09, Color(0.5, 0.36, 0.22)), Vector3(0.12 + (k % 2) * 0.13, 0.5, -0.14 + k * 0.14))
+			_add(node, Game.mesh_cyl(0.05, 0.04, 0.09, Color(0.5, 0.36, 0.22), "wood"), Vector3(0.12 + (k % 2) * 0.13, 0.5, -0.14 + k * 0.14))
 		# Two large water jars beside the table.
 		for k in 2:
-			_add(node, Game.mesh_cyl(0.2, 0.28, 0.7, clay.darkened(0.05)), Vector3(0.75 + k * 0.5, 0.35, 0.1))
+			_add(node, Game.mesh_cyl(0.2, 0.28, 0.7, clay.darkened(0.05), "clay"), Vector3(0.75 + k * 0.5, 0.35, 0.1))
 	waters.append({"pos": at, "kind": kind})
 
 
-func _mesh(mesh: Mesh, color: Color) -> MeshInstance3D:
+func _mesh(mesh: Mesh, color: Color, surface: String = "") -> MeshInstance3D:
 	var mi := MeshInstance3D.new()
 	mi.mesh = mesh
-	mi.material_override = Game.mat(color)
+	mi.material_override = Game.mat(color, surface)
 	return mi
 
 
@@ -321,12 +321,12 @@ func _mark_site() -> void:
 	var hx := COURT.x * 0.5
 	var hz := COURT.y * 0.5
 	for corner in [Vector2(-hx, -hz), Vector2(hx, -hz), Vector2(hx, hz), Vector2(-hx, hz)]:
-		_add(_site, Game.mesh_cyl(0.07, 0.09, 2.3, BRONZE), Vector3(corner.x, 1.15, corner.y))
+		_add(_site, Game.mesh_cyl(0.07, 0.09, 2.3, BRONZE, "metal"), Vector3(corner.x, 1.15, corner.y))
 	# Timber and cloth laid ready where the tent will stand.
 	for k in 6:
-		_add(_site, Game.mesh_box(Vector3(0.7, 0.12, 4.4), GOLD.darkened(0.25)), Vector3(-9.0 + k * 0.8, 0.06 + (k % 2) * 0.12, 0))
+		_add(_site, Game.mesh_box(Vector3(0.7, 0.12, 4.4), GOLD.darkened(0.25), "wood"), Vector3(-9.0 + k * 0.8, 0.06 + (k % 2) * 0.12, 0))
 	for k in 4:
-		_add(_site, Game.mesh_cyl(0.3, 0.3, 1.6, LINEN), Vector3(4.0 + k * 0.7, 0.3, 3.0), Vector3(0, 0, PI * 0.5))
+		_add(_site, Game.mesh_cyl(0.3, 0.3, 1.6, LINEN, "linen"), Vector3(4.0 + k * 0.7, 0.3, 3.0), Vector3(0, 0, PI * 0.5))
 
 
 ## Sets up the finished tabernacle. Called at once from Paran onward, and at Sinai when the
@@ -364,17 +364,17 @@ func raise_tabernacle() -> void:
 			var key := Vector2i((end * 100.0).round())
 			if not posted.has(key):
 				posted[key] = true
-				_add(tabernacle, Game.mesh_cyl(0.06, 0.06, post_h, BRONZE), Vector3(end.x, post_h * 0.5, end.y))
-				_add(tabernacle, Game.mesh_box(Vector3(0.2, 0.1, 0.2), BRONZE.darkened(0.2)), Vector3(end.x, 0.05, end.y))
-				_add(tabernacle, Game.mesh_sphere(0.085, Color(0.82, 0.82, 0.85)), Vector3(end.x, post_h + 0.04, end.y))
+				_add(tabernacle, Game.mesh_cyl(0.06, 0.06, post_h, BRONZE, "metal"), Vector3(end.x, post_h * 0.5, end.y))
+				_add(tabernacle, Game.mesh_box(Vector3(0.2, 0.1, 0.2), BRONZE.darkened(0.2), "metal"), Vector3(end.x, 0.05, end.y))
+				_add(tabernacle, Game.mesh_sphere(0.085, Color(0.82, 0.82, 0.85), "metal"), Vector3(end.x, post_h + 0.04, end.y))
 		var mid := (a + b) * 0.5
 		var turn := Vector3(0, PI * 0.5, 0) if is_equal_approx(a.x, b.x) else Vector3.ZERO
 		if sp[2]:
 			var bands := [Color(0.16, 0.26, 0.62), Color(0.42, 0.2, 0.52), Color(0.72, 0.12, 0.12)]
 			for k in 3:
-				_add(tabernacle, Game.mesh_box(Vector3(span - 0.1, 0.68, 0.05), bands[k]), Vector3(mid.x, 0.4 + k * 0.7, mid.y), turn)
+				_add(tabernacle, Game.mesh_box(Vector3(span - 0.1, 0.68, 0.05), bands[k], "linen"), Vector3(mid.x, 0.4 + k * 0.7, mid.y), turn)
 		else:
-			_add(tabernacle, Game.mesh_box(Vector3(span - 0.08, post_h - 0.15, 0.04), LINEN), Vector3(mid.x, post_h * 0.5, mid.y), turn)
+			_add(tabernacle, Game.mesh_box(Vector3(span - 0.08, post_h - 0.15, 0.04), LINEN, "linen"), Vector3(mid.x, post_h * 0.5, mid.y), turn)
 	# The linen is solid; the gate screen is a hanging you can walk through.
 	_solid(tabernacle, Vector3(COURT.x, post_h, 0.3), Vector3(0, post_h * 0.5, hz))
 	_solid(tabernacle, Vector3(COURT.x, post_h, 0.3), Vector3(0, post_h * 0.5, -hz))
@@ -388,25 +388,25 @@ func raise_tabernacle() -> void:
 	var width := 10.0 * CUBIT
 	var height := 10.0 * CUBIT
 	var cx := -length * 0.5
-	_add(tabernacle, Game.mesh_box(Vector3(length, height, width), GOLD.darkened(0.15)), Vector3(cx, height * 0.5, 0))
-	_add(tabernacle, Game.mesh_box(Vector3(length + 0.25, height - 0.5, width + 0.5), Color(0.17, 0.13, 0.12)), Vector3(cx - 0.2, height * 0.5 + 0.3, 0))
+	_add(tabernacle, Game.mesh_box(Vector3(length, height, width), GOLD.darkened(0.15), "metal"), Vector3(cx, height * 0.5, 0))
+	_add(tabernacle, Game.mesh_box(Vector3(length + 0.25, height - 0.5, width + 0.5), Color(0.17, 0.13, 0.12), "hair"), Vector3(cx - 0.2, height * 0.5 + 0.3, 0))
 	_add(tabernacle, Game.mesh_box(Vector3(length + 0.4, 0.1, width + 0.7), Color(0.45, 0.2, 0.15)), Vector3(cx - 0.2, height + 0.08, 0))
 	for k in 5:
-		_add(tabernacle, Game.mesh_cyl(0.13, 0.13, height, GOLD, 0.15), Vector3(0.2, height * 0.5, -width * 0.5 + 0.2 + k * (width - 0.4) / 4.0))
+		_add(tabernacle, Game.mesh_cyl(0.13, 0.13, height, GOLD, "metal", 0.15), Vector3(0.2, height * 0.5, -width * 0.5 + 0.2 + k * (width - 0.4) / 4.0))
 	var bands2 := [Color(0.16, 0.26, 0.62), Color(0.42, 0.2, 0.52), Color(0.72, 0.12, 0.12)]
 	for k in 3:
-		_add(tabernacle, Game.mesh_box(Vector3(0.05, height / 3.0 - 0.04, width - 0.5), bands2[k]), Vector3(0.05, height / 6.0 + k * height / 3.0, 0))
+		_add(tabernacle, Game.mesh_box(Vector3(0.05, height / 3.0 - 0.04, width - 0.5), bands2[k], "linen"), Vector3(0.05, height / 6.0 + k * height / 3.0, 0))
 	_solid(tabernacle, Vector3(length + 0.4, height, width + 0.5), Vector3(cx - 0.1, height * 0.5, 0))
 
 	# The bronze altar, five cubits square and three high, with a horn at each corner, and its fire.
 	var altar := Vector3(11.4, 0, 0)
 	var side := 5.0 * CUBIT
 	var tall := 3.0 * CUBIT
-	_add(tabernacle, Game.mesh_box(Vector3(side, tall, side), BRONZE), altar + Vector3(0, tall * 0.5, 0))
+	_add(tabernacle, Game.mesh_box(Vector3(side, tall, side), BRONZE, "metal"), altar + Vector3(0, tall * 0.5, 0))
 	for hx2 in [-1.0, 1.0]:
 		for hz2 in [-1.0, 1.0]:
-			_add(tabernacle, Game.mesh_box(Vector3(0.16, 0.3, 0.16), BRONZE.lightened(0.1)), altar + Vector3(hx2 * (side * 0.5 - 0.08), tall + 0.15, hz2 * (side * 0.5 - 0.08)))
-	_add(tabernacle, Game.mesh_cyl(0.0, 0.75, 1.5, Color(1.0, 0.5, 0.1), 3.0), altar + Vector3(0, tall + 0.75, 0))
+			_add(tabernacle, Game.mesh_box(Vector3(0.16, 0.3, 0.16), BRONZE.lightened(0.1), "metal"), altar + Vector3(hx2 * (side * 0.5 - 0.08), tall + 0.15, hz2 * (side * 0.5 - 0.08)))
+	_add(tabernacle, Game.mesh_cyl(0.0, 0.75, 1.5, Color(1.0, 0.5, 0.1), "", 3.0), altar + Vector3(0, tall + 0.75, 0))
 	var glow := OmniLight3D.new()
 	glow.light_color = Color(1.0, 0.6, 0.25)
 	glow.light_energy = 2.5
@@ -415,8 +415,8 @@ func raise_tabernacle() -> void:
 	tabernacle.add_child(glow)
 	_solid(tabernacle, Vector3(side, tall, side), altar + Vector3(0, tall * 0.5, 0))
 	# The bronze basin between the altar and the tent.
-	_add(tabernacle, Game.mesh_cyl(0.3, 0.42, 0.55, BRONZE), Vector3(4.6, 0.275, 0))
-	_add(tabernacle, Game.mesh_cyl(0.75, 0.5, 0.35, BRONZE.lightened(0.08)), Vector3(4.6, 0.72, 0))
+	_add(tabernacle, Game.mesh_cyl(0.3, 0.42, 0.55, BRONZE, "metal"), Vector3(4.6, 0.275, 0))
+	_add(tabernacle, Game.mesh_cyl(0.75, 0.5, 0.35, BRONZE.lightened(0.08), "metal"), Vector3(4.6, 0.72, 0))
 	_solid(tabernacle, Vector3(1.2, 0.9, 1.2), Vector3(4.6, 0.45, 0))
 
 	# The cloud that covers the tent by day.
@@ -484,39 +484,39 @@ func _work(work: String, at: Vector3, angle: float) -> void:
 	match work:
 		"weave":
 			# A ground loom: two beams pegged to the earth with the cloth growing between them.
-			_add(node, Game.mesh_box(Vector3(1.0, 0.06, 0.06), WOOD), Vector3(0, 0.1, -0.1))
-			_add(node, Game.mesh_box(Vector3(1.0, 0.06, 0.06), WOOD), Vector3(0, 0.1, 1.5))
-			_add(node, Game.mesh_box(Vector3(0.86, 0.015, 1.55), LINEN), Vector3(0, 0.1, 0.7))
-			_add(node, Game.mesh_box(Vector3(0.86, 0.03, 0.5), Color(0.35, 0.28, 0.24)), Vector3(0, 0.11, 0.2))
+			_add(node, Game.mesh_box(Vector3(1.0, 0.06, 0.06), WOOD, "wood"), Vector3(0, 0.1, -0.1))
+			_add(node, Game.mesh_box(Vector3(1.0, 0.06, 0.06), WOOD, "wood"), Vector3(0, 0.1, 1.5))
+			_add(node, Game.mesh_box(Vector3(0.86, 0.015, 1.55), LINEN, "linen"), Vector3(0, 0.1, 0.7))
+			_add(node, Game.mesh_box(Vector3(0.86, 0.03, 0.5), Color(0.35, 0.28, 0.24), "cloth"), Vector3(0, 0.11, 0.2))
 		"spin":
-			_add(node, Game.mesh_cyl(0.3, 0.22, 0.25, Color(0.55, 0.42, 0.28)), Vector3(0.1, 0.125, 0.1))
+			_add(node, Game.mesh_cyl(0.3, 0.22, 0.25, Color(0.55, 0.42, 0.28), "basket"), Vector3(0.1, 0.125, 0.1))
 			for k in 4:
 				_add(node, Game.mesh_sphere(0.11, Color(0.93, 0.91, 0.86)), Vector3(0.1 + sin(k * 1.6) * 0.12, 0.3, 0.1 + cos(k * 1.6) * 0.12))
 		"grind":
 			# A saddle quern: a broad lower stone and a smaller one worked across it.
-			_add(node, Game.mesh_box(Vector3(0.36, 0.12, 0.6), Color(0.45, 0.43, 0.41)), Vector3(0, 0.06, 0.05), Vector3(0.08, 0, 0))
-			_add(node, Game.mesh_box(Vector3(0.3, 0.08, 0.14), Color(0.35, 0.33, 0.32)), Vector3(0, 0.17, 0.05))
-			_add(node, Game.mesh_cyl(0.2, 0.14, 0.14, Color(0.66, 0.42, 0.3)), Vector3(0.45, 0.07, 0.2))
+			_add(node, Game.mesh_box(Vector3(0.36, 0.12, 0.6), Color(0.45, 0.43, 0.41), "stone"), Vector3(0, 0.06, 0.05), Vector3(0.08, 0, 0))
+			_add(node, Game.mesh_box(Vector3(0.3, 0.08, 0.14), Color(0.35, 0.33, 0.32), "stone"), Vector3(0, 0.17, 0.05))
+			_add(node, Game.mesh_cyl(0.2, 0.14, 0.14, Color(0.66, 0.42, 0.3), "clay"), Vector3(0.45, 0.07, 0.2))
 		"cook":
 			for k in 3:
-				_add(node, Game.mesh_sphere(0.14, Color(0.35, 0.32, 0.3)), Vector3(sin(TAU * k / 3.0) * 0.28, 0.1, 0.25 + cos(TAU * k / 3.0) * 0.28))
-			_add(node, Game.mesh_cyl(0.0, 0.2, 0.3, Color(1.0, 0.5, 0.1), 2.5), Vector3(0, 0.15, 0.25))
-			_add(node, Game.mesh_cyl(0.3, 0.24, 0.3, Color(0.2, 0.17, 0.15)), Vector3(0, 0.42, 0.25))
-			_add(node, Game.mesh_cyl(0.015, 0.015, 0.6, WOOD), Vector3(0.12, 0.7, 0.25), Vector3(0.4, 0, 0.3))
+				_add(node, Game.mesh_sphere(0.14, Color(0.35, 0.32, 0.3), "stone"), Vector3(sin(TAU * k / 3.0) * 0.28, 0.1, 0.25 + cos(TAU * k / 3.0) * 0.28))
+			_add(node, Game.mesh_cyl(0.0, 0.2, 0.3, Color(1.0, 0.5, 0.1), "", 2.5), Vector3(0, 0.15, 0.25))
+			_add(node, Game.mesh_cyl(0.3, 0.24, 0.3, Color(0.2, 0.17, 0.15), "clay"), Vector3(0, 0.42, 0.25))
+			_add(node, Game.mesh_cyl(0.015, 0.015, 0.6, WOOD, "wood"), Vector3(0.12, 0.7, 0.25), Vector3(0.4, 0, 0.3))
 		"arms":
 			# A whetstone with a blade on it, and spears stood in a rack.
-			_add(node, Game.mesh_box(Vector3(0.5, 0.14, 0.3), Color(0.42, 0.42, 0.44)), Vector3(0, 0.07, 0.1))
-			_add(node, Game.mesh_box(Vector3(0.05, 0.012, 0.55), BRONZE.lightened(0.15)), Vector3(0, 0.15, 0.12), Vector3(0, 0.5, 0))
+			_add(node, Game.mesh_box(Vector3(0.5, 0.14, 0.3), Color(0.42, 0.42, 0.44), "stone"), Vector3(0, 0.07, 0.1))
+			_add(node, Game.mesh_box(Vector3(0.05, 0.012, 0.55), BRONZE.lightened(0.15), "metal"), Vector3(0, 0.15, 0.12), Vector3(0, 0.5, 0))
 			for k in [-1.0, 1.0]:
-				_add(node, Game.mesh_cyl(0.04, 0.04, 1.3, WOOD), Vector3(1.1 + k * 0.5, 0.65, 0.6))
-			_add(node, Game.mesh_cyl(0.03, 0.03, 1.1, WOOD), Vector3(1.1, 1.2, 0.6), Vector3(0, 0, PI * 0.5))
+				_add(node, Game.mesh_cyl(0.04, 0.04, 1.3, WOOD, "wood"), Vector3(1.1 + k * 0.5, 0.65, 0.6))
+			_add(node, Game.mesh_cyl(0.03, 0.03, 1.1, WOOD, "wood"), Vector3(1.1, 1.2, 0.6), Vector3(0, 0, PI * 0.5))
 			for k in 3:
-				_add(node, Game.mesh_cyl(0.018, 0.02, 1.9, WOOD), Vector3(0.8 + k * 0.3, 0.92, 0.42), Vector3(-0.2, 0, 0))
-				_add(node, Game.mesh_cyl(0.0, 0.03, 0.2, BRONZE), Vector3(0.8 + k * 0.3, 1.93, 0.21), Vector3(-0.2, 0, 0))
+				_add(node, Game.mesh_cyl(0.018, 0.02, 1.9, WOOD, "wood"), Vector3(0.8 + k * 0.3, 0.92, 0.42), Vector3(-0.2, 0, 0))
+				_add(node, Game.mesh_cyl(0.0, 0.03, 0.2, BRONZE, "metal"), Vector3(0.8 + k * 0.3, 1.93, 0.21), Vector3(-0.2, 0, 0))
 		"mend":
-			_add(node, Game.mesh_cyl(0.28, 0.28, 0.1, Color(0.7, 0.62, 0.45)), Vector3(0, 0.05, 0.1))
+			_add(node, Game.mesh_cyl(0.28, 0.28, 0.1, Color(0.7, 0.62, 0.45), "basket"), Vector3(0, 0.05, 0.1))
 			for k in 5:
-				_add(node, Game.mesh_cyl(0.02, 0.035, 0.35, WOOD), Vector3(0.45 + (k % 3) * 0.07, 0.04 + (k / 3) * 0.07, 0.1), Vector3(0, 0, PI * 0.5))
+				_add(node, Game.mesh_cyl(0.02, 0.035, 0.35, WOOD, "wood"), Vector3(0.45 + (k % 3) * 0.07, 0.04 + (k / 3) * 0.07, 0.1), Vector3(0, 0, PI * 0.5))
 
 
 func _place_props(rng: RandomNumberGenerator) -> void:
@@ -533,8 +533,8 @@ func _place_props(rng: RandomNumberGenerator) -> void:
 			0:
 				# A cooking fire in a ring of stones. Only a few of them cast light.
 				for k in 6:
-					_add(self, Game.mesh_sphere(0.14, Color(0.35, 0.32, 0.3)), at + Vector3(sin(TAU * k / 6.0) * 0.42, 0.08, cos(TAU * k / 6.0) * 0.42))
-				_add(self, Game.mesh_cyl(0.0, 0.26, 0.55, Color(1.0, 0.5, 0.1), 2.5), at + Vector3(0, 0.28, 0))
+					_add(self, Game.mesh_sphere(0.14, Color(0.35, 0.32, 0.3), "stone"), at + Vector3(sin(TAU * k / 6.0) * 0.42, 0.08, cos(TAU * k / 6.0) * 0.42))
+				_add(self, Game.mesh_cyl(0.0, 0.26, 0.55, Color(1.0, 0.5, 0.1), "", 2.5), at + Vector3(0, 0.28, 0))
 				if _lights < 4:
 					_lights += 1
 					var glow := OmniLight3D.new()
@@ -545,13 +545,13 @@ func _place_props(rng: RandomNumberGenerator) -> void:
 					add_child(glow)
 			1:
 				for k in 2 + rng.randi() % 2:
-					_add(self, Game.mesh_cyl(0.2, 0.3, 0.7, Color(0.66, 0.42, 0.3)), at + Vector3(k * 0.55, 0.35, (k % 2) * 0.3))
+					_add(self, Game.mesh_cyl(0.2, 0.3, 0.7, Color(0.66, 0.42, 0.3), "clay"), at + Vector3(k * 0.55, 0.35, (k % 2) * 0.3))
 			2:
-				_add(self, Game.mesh_cyl(0.34, 0.26, 0.3, Color(0.6, 0.48, 0.3)), at + Vector3(0, 0.15, 0))
-				_add(self, Game.mesh_cyl(0.26, 0.2, 0.24, Color(0.55, 0.43, 0.27)), at + Vector3(0.6, 0.12, 0.2))
+				_add(self, Game.mesh_cyl(0.34, 0.26, 0.3, Color(0.6, 0.48, 0.3), "basket"), at + Vector3(0, 0.15, 0))
+				_add(self, Game.mesh_cyl(0.26, 0.2, 0.24, Color(0.55, 0.43, 0.27), "basket"), at + Vector3(0.6, 0.12, 0.2))
 			3:
 				for k in 5:
-					_add(self, Game.mesh_cyl(0.05, 0.05, 1.0, WOOD.darkened(k * 0.05)), at + Vector3(0, 0.05 + (k / 3) * 0.1, (k % 3) * 0.11), Vector3(0, rng.randf_range(-0.15, 0.15), PI * 0.5))
+					_add(self, Game.mesh_cyl(0.05, 0.05, 1.0, WOOD.darkened(k * 0.05), "wood"), at + Vector3(0, 0.05 + (k / 3) * 0.1, (k % 3) * 0.11), Vector3(0, rng.randf_range(-0.15, 0.15), PI * 0.5))
 
 
 static func _sheep_mesh() -> ArrayMesh:
