@@ -82,7 +82,8 @@ Vulkan, Direct3D 12 or Metal is enough.
 Everything after the bare `--` is a debug argument of the game. The full list is at the top of
 [scripts/world.gd](scripts/world.gd): teleporting to the objective, starting a raid, opening a
 menu (`--menu=gear|trade|chest|lid|settings`), equipping gear (`--equip=bronze_spear,hide_shield`),
-holding the sling or bow for a screenshot (`--aim=sling|bow`), skipping objectives.
+holding the sling or bow for a screenshot (`--aim=sling|bow`), stopping in the middle of a blow
+(`--blow=3 --view=115`), skipping objectives.
 
 The music is made by [tools/make_music.py](tools/make_music.py) (needs Python with numpy, and
 ffmpeg). Run it again only to change the music; the `.ogg` files it writes are committed.
@@ -97,7 +98,7 @@ Run the self-test after every change, and take a screenshot after any visual cha
 | Mouse | Look |
 | Shift | Sprint (costs thirst and stamina; walk to get your breath back) |
 | Space | Jump |
-| Left mouse | Strike. Press again during a blow for the next one: a cut from top to bottom, a sweep from left to right, then a cut from top right to bottom left. With a blade in each hand the sweep is the left hand's. Heavier weapons swing more slowly. With a bow: hold to draw, release to shoot |
+| Left mouse | Strike. Press again during a blow for the next one: a cut from top to bottom, a sweep from left to right, then a cut from top right to bottom left. With a blade in each hand the sweep is the left hand's. Heavier weapons swing more slowly. In the air the first blow is a jump attack, brought down from overhead. With a bow: hold to draw, release to shoot |
 | Right mouse | Hold to whirl the sling, release to throw. While it goes round, a dotted arc and a ring show where the stone will land (red on an enemy). Each throw uses up a stone |
 | R | Put both hands' gear away (staff, spear, bow and shield on the back, blades at the belt) or take it up. Attacking takes it up by itself |
 | E | Talk or use |
@@ -267,12 +268,19 @@ What a figure is made of:
 - **Animation.** The clips in `animations.glb` are made for a different skeleton.
   `scripts/retarget.gd` converts the ones the game uses to each body when the first figure is
   built (about a tenth of a second). Walking blends idle, walk, jog and sprint by speed; a
-  strike or a sling throw plays on the upper body only, so the legs keep moving.
+  strike or a sling throw plays on the upper body only, so the legs keep moving. A blow made
+  standing still also plays on the hips and legs: the hips turn and drive forward, the knees
+  bend and the feet stay planted. Off the ground the body goes over to the kit's `Jump` pose,
+  and a figure that lands standing still sinks on its knees for a moment (`Land`).
 - **Weapons.** Each hand can hold something: a weapon in the fist, a shield strapped to the
   forearm, or (left hand) a bow. It is carried in a resting position and turned into the fist
   for a blow. The three blows, the sling and the bow are not clips from the kit: they are made
   by aiming the arm bones and turning the forearm and wrist so the blade points along the cut
   (`_blow_keys()`, `_aimed()` and `_grip()`). Left-hand blows are the right-hand ones mirrored.
+  Each blow pose also says how the hips turn, shift and sink; `_stand()` then bends the legs so
+  the feet stay where they are (the left foot is in front, as in the Idle clip). The jump
+  attack (`Blow_Air_R/L`) gives each thigh and shin a direction instead, since nothing holds
+  the feet: the legs trail as the weapon goes up and the knees come forward as it comes down.
 - **Clothes from gear.** For the player, what is equipped decides the clothes (the `wear` list
   of each item in `data/items.gd`): a tunic, a robe, a scale coat, a helmet, a necklace. Cloth
   and sash colors still come from the character creator; the creator's clothing row is not shown

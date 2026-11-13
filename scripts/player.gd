@@ -48,6 +48,8 @@ var _sling_t := 0.0
 var _sling_let_go := false
 var _aiming_bow := false
 var _sprinting := false
+var _jumping := false     # off the ground because of a jump, not a step down
+var _air_t := 0.0         # seconds since the feet left the ground
 var _moving := false
 var _tired := false
 var _thirst_warned := 0
@@ -181,7 +183,7 @@ func _physics_process(delta: float) -> void:
 		_moving = iv.length() > 0.1
 		_sprinting = Input.is_action_pressed("sprint") and _moving and Game.thirst > 0.0 and not _tired and Game.stamina > 0.0
 		if is_on_floor() and Input.is_action_just_pressed("jump"):
-			velocity.y = JUMP
+			jump()
 	var speed := SPRINT if _sprinting else WALK
 	if Game.thirst <= 0.0:
 		speed *= 0.6
@@ -196,8 +198,16 @@ func _physics_process(delta: float) -> void:
 		body.rotation.y = yaw     # face the mark while aiming
 	elif dir.length() > 0.1:
 		body.rotation.y = lerp_angle(body.rotation.y, atan2(-dir.x, -dir.z), 12.0 * delta)
+	# The figure takes its jump pose at once after a jump, but only after a moment when the
+	# ground simply drops away, so a step down or a bump does not throw its arms up.
+	if is_on_floor():
+		_air_t = 0.0
+		if velocity.y <= 0.0:
+			_jumping = false
+	else:
+		_air_t += delta
 	if not dead:
-		body.animate(delta, Vector2(velocity.x, velocity.z).length())
+		body.animate(delta, Vector2(velocity.x, velocity.z).length(), in_air())
 
 	# Keep the player inside the playable area and above the ground.
 	if indoors:
@@ -302,6 +312,17 @@ func _update_focus() -> void:
 			best = d
 			focus = it
 	Game.prompt = "[E]  %s" % focus.prompt_text() if focus != null else ""
+
+
+## Leaves the ground. Call only when standing on it.
+func jump() -> void:
+	velocity.y = JUMP
+	_jumping = true
+
+
+## Off the ground in a way that shows: jumping, or falling for more than a moment.
+func in_air() -> bool:
+	return not is_on_floor() and (_jumping or _air_t > 0.25)
 
 
 func forward() -> Vector3:

@@ -51,11 +51,12 @@ const TWO_SIDED := ["skirt_short", "skirt_long", "sash", "cloak", "band", "band_
 const HAIR_FILES := ["hair_buzzed", "hair_parted", "hair_long", "hair_buns", ""]
 
 const ANIMS := ["Idle", "Walk", "Jog_Fwd", "Sprint", "Sword_Attack", "Spell_Simple_Shoot", "Punch_Cross", "Death01",
-	"Sitting_Idle", "Sitting_Talking", "Fixing_Kneeling"]
+	"Sitting_Idle", "Sitting_Talking", "Fixing_Kneeling", "Jump", "Jump_Land"]
 ## The blows of a combo, in order: A cuts from top to bottom, B sweeps from left to right, C cuts
 ## from top right to bottom left. hit: when it lands; chain: the soonest the next blow may follow;
 ## length: how long the move takes if nothing follows (seconds at normal speed; a heavy weapon is
-## slower, see attack()). The clips are made from arm poses in _library().
+## slower, see attack()). The clips are made from poses of the arms, chest, hips and legs in
+## _library().
 const BLOWS := [
 	{"shot": "blow_a", "hit": 0.16, "chain": 0.26, "length": 0.5},
 	{"shot": "blow_b", "hit": 0.13, "chain": 0.22, "length": 0.42},
@@ -82,6 +83,15 @@ const STOW_TIME := 0.36
 const UPPER_BODY := ["spine_01", "spine_02", "spine_03", "neck_01", "Head", "clavicle_l", "clavicle_r",
 	"upperarm_l", "upperarm_r", "lowerarm_l", "lowerarm_r", "hand_l", "hand_r"]
 const FINGERS := ["index", "middle", "ring", "pinky", "thumb"]
+## The hips and legs. A blow made standing still moves these too (see attack()).
+const LOWER_BODY := ["pelvis", "thigh_l", "calf_l", "foot_l", "ball_l", "thigh_r", "calf_r", "foot_r", "ball_r"]
+## Below PLANT_SPEED (m/s) a figure counts as standing and puts its hips and legs into a blow;
+## if it gets going faster than UNPLANT_SPEED during the blow, the legs go back to walking.
+const PLANT_SPEED := 1.0
+const UNPLANT_SPEED := 2.0
+## Coming down after at least this long off the ground (seconds), a figure standing still sinks
+## on its knees to take the landing.
+const LAND_AFTER := 0.3
 
 static var _bodies := {}     # sex -> measured body data
 static var _meshes := {}     # "sex/piece" -> generated ArrayMesh
@@ -125,6 +135,16 @@ var _carry_l := Transform3D.IDENTITY
 var _strike_l := Transform3D.IDENTITY
 var _stow_l := Transform3D.IDENTITY
 var _strike_side := "r"           # which hand the latest blow was made with
+var _stance := 0                  # which of the two stance one-shots the latest blow used
+var _stance_clips: Array = []     # their animation nodes, given the clip of the blow each time
+var _legs := ""                   # what the hips and legs are doing over the walk: "" nothing,
+                                  # "blow" a blow made standing, "air" a blow made off the ground
+var _legs_left := 0.0             # seconds until that is over
+var _land_left := 0.0             # seconds until the knees have come up again after a landing
+var _first_blow := {}             # side -> animation node of the first blow, which has an airborne form
+var _in_air := false              # off the ground
+var _air_time := 0.0              # for how long
+var _air := 0.0                   # how far the body has gone over to the airborne pose, 0..1
 var _whirling := false            # the sling is going round overhead
 var _whirl_t := 0.0
 var _auto_release := -1.0         # whirl(): let go by itself after this long
@@ -1297,7 +1317,7 @@ static func _library(sex: int, target: Skeleton3D) -> AnimationLibrary:
 		var src_sk: Skeleton3D = src.find_child("Skeleton3D", true, false)
 		var src_player: AnimationPlayer = src.find_child("AnimationPlayer", true, false)
 		var lib: AnimationLibrary = Retarget.convert(src_sk, src_player, target, ANIMS, "Armature/Skeleton3D")
-		for cycle_name in ["Idle", "Walk", "Jog_Fwd", "Sprint", "Sitting_Idle", "Sitting_Talking"]:
+		for cycle_name in ["Idle", "Walk", "Jog_Fwd", "Sprint", "Sitting_Idle", "Sitting_Talking", "Jump"]:
 			lib.get_animation(cycle_name).loop_mode = Animation.LOOP_LINEAR
 		# The kneeling clip kneels down, works, and stands up again. People at work stay down:
 		# they use only its middle, where the hips are low and the hands are busy.
@@ -1305,13 +1325,19 @@ static func _library(sex: int, target: Skeleton3D) -> AnimationLibrary:
 		# Poses no clip has are made by aiming the arm bones (directions in model space: the model
 		# faces +Z, its right is -X), turning the forearm and wrist so the blade held in the fist
 		# points along the cut ("blade_r"), and turning ("twist", + to the left) or bending
-		# ("lean", + forward) the chest.
+		# ("lean", + forward) the chest. The blows also move the hips over the feet (see _stand).
 		var strike := lib.get_animation("Sword_Attack")
 		var idle := lib.get_animation("Idle")
 		for side in ["r", "l"]:
 			var keys: Dictionary = _blow_keys(side)
-			for blow in ["a", "b", "c"]:
-				lib.add_animation("Blow_%s_%s" % [blow.to_upper(), side.to_upper()], _aimed(target, idle, strike, keys[blow]))
+			for blow in ["a", "b", "c", "air"]:
+				lib.add_animation("Blow_%s_%s" % [blow.capitalize(), side.to_upper()], _aimed(target, idle, strike, keys[blow], true))
+		# Landing from a jump: the knees give, the hips sink over the feet and come up again.
+		lib.add_animation("Land", _aimed(target, idle, strike, [
+			[0.0, {"sink": 0.15, "pitch": 0.14, "shift": Vector3(0.0, 0.0, 0.03)}],
+			[0.08, {"sink": 0.2, "pitch": 0.16, "shift": Vector3(0.0, 0.0, 0.04)}],
+			[0.22, {"sink": 0.08, "pitch": 0.06, "shift": Vector3(0.0, 0.0, 0.02)}],
+			[0.36, {}]], true))
 		# The sling: the right hand held high over the head while the sling goes round (looped for
 		# as long as it is held), the left arm pointing at the mark; then the arm comes over and
 		# forward, and follows through.
@@ -1366,6 +1392,30 @@ static func pose_basis(anim: Animation, sk: Skeleton3D, bone: int, time: float) 
 	return out
 
 
+## Where `bone` is in model space at `time` of an animation made for `sk`. Bones the animation
+## leaves alone take their pose from the start of `base`.
+static func pose_transform(anim: Animation, sk: Skeleton3D, bone: int, time: float, base: Animation = null) -> Transform3D:
+	var out := Transform3D.IDENTITY
+	var b := bone
+	while b >= 0:
+		var path := NodePath("Armature/Skeleton3D:%s" % sk.get_bone_name(b))
+		var local := sk.get_bone_rest(b)
+		var from := anim
+		var at := time
+		if base != null and anim.find_track(path, Animation.TYPE_ROTATION_3D) < 0:
+			from = base
+			at = 0.0
+		var turn := from.find_track(path, Animation.TYPE_ROTATION_3D)
+		if turn >= 0:
+			local.basis = Basis(from.rotation_track_interpolate(turn, at))
+		var place := from.find_track(path, Animation.TYPE_POSITION_3D)
+		if place >= 0:
+			local.origin = from.position_track_interpolate(place, at)
+		out = local * out
+		b = sk.get_bone_parent(b)
+	return out
+
+
 ## A stretch of an animation as a clip of its own, played forward and then back so it never jumps.
 static func _cut(a: Animation, from: float, to: float) -> Animation:
 	var out := Animation.new()
@@ -1384,50 +1434,141 @@ static func _cut(a: Animation, from: float, to: float) -> Animation:
 	return out
 
 
-## The arm poses of the three blows of a combo, made with the right hand ("r") or the left ("l").
+## The poses of the three blows of a combo, made with the right hand ("r") or the left ("l").
 ## Right hand: A chops from overhead down the middle; B is a backhand from the left across to the
 ## right; C cuts from high on the right down to low on the left. Left hand: the same moves seen in
 ## a mirror, except that B is the left hand's forehand, which also sweeps from left to right.
+##
+## The whole body goes into each blow. The hips turn with the cut ("hips") and carry the weight
+## from the back foot to the front ("shift", "sink", "pitch"), the chest turns and bends further
+## on top of that ("twist", "lean"), and the other arm swings the opposite way to balance. The
+## feet stay where the figure stands (the left foot in front, as in the Idle clip); only the last
+## blow steps into the cut with the front foot ("step") and steps back as it ends.
 static func _blow_keys(side: String) -> Dictionary:
 	var a := [
-		[0.0, {"lean": -0.08, "upperarm_r": Vector3(-0.3, 0.9, 0.15), "lowerarm_r": Vector3(0.2, 0.7, -0.7), "blade_r": Vector3(0.05, 0.45, -0.9)}],
-		[0.08, {"upperarm_r": Vector3(-0.15, 0.8, 0.55), "lowerarm_r": Vector3(0.12, 0.75, 0.65), "blade_r": Vector3(0.08, 0.99, 0.1)}],
-		[0.14, {"lean": 0.1, "upperarm_r": Vector3(-0.08, 0.35, 0.93), "lowerarm_r": Vector3(0.15, 0.05, 0.99), "blade_r": Vector3(0.08, 0.25, 0.96)}],
-		[0.2, {"lean": 0.18, "upperarm_r": Vector3(-0.03, -0.2, 0.98), "lowerarm_r": Vector3(0.2, -0.6, 0.78), "blade_r": Vector3(0.1, -0.45, 0.89)}],
-		[0.3, {"lean": 0.22, "upperarm_r": Vector3(0.0, -0.7, 0.7), "lowerarm_r": Vector3(0.2, -0.9, 0.4), "blade_r": Vector3(0.12, -0.85, 0.5)}],
+		[0.0, {"hips": -0.2, "twist": -0.12, "lean": -0.12, "shift": Vector3(-0.01, 0.0, -0.05),
+			"upperarm_r": Vector3(-0.3, 0.9, 0.15), "lowerarm_r": Vector3(0.2, 0.7, -0.7), "blade_r": Vector3(0.05, 0.45, -0.9),
+			"upperarm_l": Vector3(0.35, -0.5, 0.8), "lowerarm_l": Vector3(-0.05, 0.2, 0.98)}],
+		[0.08, {"hips": -0.1, "twist": -0.08, "lean": -0.06, "shift": Vector3(0.0, 0.0, -0.02),
+			"upperarm_r": Vector3(-0.15, 0.8, 0.55), "lowerarm_r": Vector3(0.12, 0.75, 0.65), "blade_r": Vector3(0.08, 0.99, 0.1),
+			"upperarm_l": Vector3(0.35, -0.55, 0.75), "lowerarm_l": Vector3(0.0, 0.1, 1.0)}],
+		[0.14, {"hips": 0.12, "twist": 0.06, "lean": 0.14, "pitch": 0.04, "shift": Vector3(0.01, 0.0, 0.07), "sink": 0.05,
+			"upperarm_r": Vector3(-0.08, 0.35, 0.93), "lowerarm_r": Vector3(0.15, 0.05, 0.99), "blade_r": Vector3(0.08, 0.25, 0.96),
+			"upperarm_l": Vector3(0.45, -0.8, 0.3), "lowerarm_l": Vector3(0.15, -0.4, 0.9)}],
+		[0.2, {"hips": 0.26, "twist": 0.12, "lean": 0.28, "pitch": 0.08, "shift": Vector3(0.02, 0.0, 0.12), "sink": 0.075,
+			"upperarm_r": Vector3(-0.03, -0.2, 0.98), "lowerarm_r": Vector3(0.2, -0.6, 0.78), "blade_r": Vector3(0.1, -0.45, 0.89),
+			"upperarm_l": Vector3(0.5, -0.85, -0.05), "lowerarm_l": Vector3(0.3, -0.65, 0.7)}],
+		[0.3, {"hips": 0.3, "twist": 0.15, "lean": 0.34, "pitch": 0.1, "shift": Vector3(0.02, 0.0, 0.14), "sink": 0.09,
+			"upperarm_r": Vector3(0.0, -0.7, 0.7), "lowerarm_r": Vector3(0.2, -0.9, 0.4), "blade_r": Vector3(0.12, -0.85, 0.5),
+			"upperarm_l": Vector3(0.5, -0.8, -0.3), "lowerarm_l": Vector3(0.35, -0.75, 0.55)}],
 	]
 	var backhand := [
-		[0.0, {"twist": 0.5, "upperarm_r": Vector3(0.55, 0.0, 0.83), "lowerarm_r": Vector3(0.95, 0.1, -0.1), "blade_r": Vector3(0.5, 0.1, -0.85)}],
-		[0.06, {"twist": 0.3, "upperarm_r": Vector3(0.25, 0.0, 0.97), "lowerarm_r": Vector3(0.7, 0.05, 0.7), "blade_r": Vector3(0.98, 0.08, 0.15)}],
-		[0.13, {"upperarm_r": Vector3(-0.3, 0.02, 0.95), "lowerarm_r": Vector3(-0.15, 0.02, 0.99), "blade_r": Vector3(-0.25, 0.05, 0.97)}],
-		[0.185, {"twist": -0.25, "upperarm_r": Vector3(-0.7, 0.0, 0.7), "lowerarm_r": Vector3(-0.7, 0.0, 0.7), "blade_r": Vector3(-0.97, 0.05, 0.2)}],
-		[0.24, {"twist": -0.45, "upperarm_r": Vector3(-0.9, 0.0, 0.4), "lowerarm_r": Vector3(-0.85, 0.0, 0.1), "blade_r": Vector3(-0.7, 0.05, -0.7)}],
+		[0.0, {"hips": 0.3, "twist": 0.5, "lean": 0.1, "shift": Vector3(0.03, 0.0, 0.05), "sink": 0.07,
+			"upperarm_r": Vector3(0.55, 0.0, 0.83), "lowerarm_r": Vector3(0.95, 0.1, -0.1), "blade_r": Vector3(0.5, 0.1, -0.85),
+			"upperarm_l": Vector3(0.5, -0.85, 0.1), "lowerarm_l": Vector3(0.2, -0.7, 0.65)}],
+		[0.06, {"hips": 0.2, "twist": 0.3, "lean": 0.1, "shift": Vector3(0.02, 0.0, 0.05), "sink": 0.08,
+			"upperarm_r": Vector3(0.25, 0.0, 0.97), "lowerarm_r": Vector3(0.7, 0.05, 0.7), "blade_r": Vector3(0.98, 0.08, 0.15),
+			"upperarm_l": Vector3(0.55, -0.8, 0.05), "lowerarm_l": Vector3(0.3, -0.7, 0.6)}],
+		[0.13, {"lean": 0.08, "shift": Vector3(-0.01, 0.0, 0.04), "sink": 0.09,
+			"upperarm_r": Vector3(-0.3, 0.02, 0.95), "lowerarm_r": Vector3(-0.15, 0.02, 0.99), "blade_r": Vector3(-0.25, 0.05, 0.97),
+			"upperarm_l": Vector3(0.65, -0.75, -0.05), "lowerarm_l": Vector3(0.4, -0.7, 0.55)}],
+		[0.185, {"hips": -0.2, "twist": -0.25, "lean": 0.06, "shift": Vector3(-0.03, 0.0, 0.03), "sink": 0.08,
+			"upperarm_r": Vector3(-0.7, 0.0, 0.7), "lowerarm_r": Vector3(-0.7, 0.0, 0.7), "blade_r": Vector3(-0.97, 0.05, 0.2),
+			"upperarm_l": Vector3(0.7, -0.65, -0.2), "lowerarm_l": Vector3(0.55, -0.7, 0.4)}],
+		[0.24, {"hips": -0.3, "twist": -0.45, "lean": 0.05, "shift": Vector3(-0.04, 0.0, 0.02), "sink": 0.07,
+			"upperarm_r": Vector3(-0.9, 0.0, 0.4), "lowerarm_r": Vector3(-0.85, 0.0, 0.1), "blade_r": Vector3(-0.7, 0.05, -0.7),
+			"upperarm_l": Vector3(0.75, -0.6, -0.25), "lowerarm_l": Vector3(0.6, -0.7, 0.35)}],
 	]
 	var forehand := [
-		[0.0, {"twist": -0.5, "upperarm_r": Vector3(-0.85, 0.1, -0.3), "lowerarm_r": Vector3(-0.6, 0.15, -0.75), "blade_r": Vector3(-0.3, 0.15, -0.95)}],
-		[0.06, {"twist": -0.3, "upperarm_r": Vector3(-0.75, 0.05, 0.4), "lowerarm_r": Vector3(-0.55, 0.05, 0.6), "blade_r": Vector3(-0.98, 0.08, 0.1)}],
-		[0.13, {"upperarm_r": Vector3(-0.3, 0.0, 0.95), "lowerarm_r": Vector3(0.15, 0.0, 0.99), "blade_r": Vector3(0.4, 0.02, 0.92)}],
-		[0.185, {"twist": 0.25, "upperarm_r": Vector3(0.05, -0.02, 1.0), "lowerarm_r": Vector3(0.65, -0.02, 0.75), "blade_r": Vector3(0.97, 0.0, 0.2)}],
-		[0.24, {"twist": 0.45, "upperarm_r": Vector3(0.35, -0.05, 0.93), "lowerarm_r": Vector3(0.9, -0.05, 0.4), "blade_r": Vector3(0.85, 0.0, -0.5)}],
+		[0.0, {"hips": -0.3, "twist": -0.5, "lean": 0.05, "shift": Vector3(-0.04, 0.0, 0.02), "sink": 0.07,
+			"upperarm_r": Vector3(-0.85, 0.1, -0.3), "lowerarm_r": Vector3(-0.6, 0.15, -0.75), "blade_r": Vector3(-0.3, 0.15, -0.95),
+			"upperarm_l": Vector3(0.35, -0.55, 0.75), "lowerarm_l": Vector3(0.0, -0.1, 1.0)}],
+		[0.06, {"hips": -0.2, "twist": -0.3, "lean": 0.06, "shift": Vector3(-0.03, 0.0, 0.03), "sink": 0.08,
+			"upperarm_r": Vector3(-0.75, 0.05, 0.4), "lowerarm_r": Vector3(-0.55, 0.05, 0.6), "blade_r": Vector3(-0.98, 0.08, 0.1),
+			"upperarm_l": Vector3(0.45, -0.65, 0.6), "lowerarm_l": Vector3(0.1, -0.3, 0.95)}],
+		[0.13, {"lean": 0.08, "shift": Vector3(-0.01, 0.0, 0.04), "sink": 0.09,
+			"upperarm_r": Vector3(-0.3, 0.0, 0.95), "lowerarm_r": Vector3(0.15, 0.0, 0.99), "blade_r": Vector3(0.4, 0.02, 0.92),
+			"upperarm_l": Vector3(0.6, -0.75, 0.2), "lowerarm_l": Vector3(0.3, -0.6, 0.75)}],
+		[0.185, {"hips": 0.2, "twist": 0.25, "lean": 0.1, "shift": Vector3(0.02, 0.0, 0.05), "sink": 0.08,
+			"upperarm_r": Vector3(0.05, -0.02, 1.0), "lowerarm_r": Vector3(0.65, -0.02, 0.75), "blade_r": Vector3(0.97, 0.0, 0.2),
+			"upperarm_l": Vector3(0.65, -0.7, -0.1), "lowerarm_l": Vector3(0.45, -0.7, 0.55)}],
+		[0.24, {"hips": 0.3, "twist": 0.45, "lean": 0.1, "shift": Vector3(0.03, 0.0, 0.05), "sink": 0.07,
+			"upperarm_r": Vector3(0.35, -0.05, 0.93), "lowerarm_r": Vector3(0.9, -0.05, 0.4), "blade_r": Vector3(0.85, 0.0, -0.5),
+			"upperarm_l": Vector3(0.7, -0.6, -0.3), "lowerarm_l": Vector3(0.5, -0.7, 0.45)}],
 	]
 	var c := [
-		[0.0, {"twist": -0.45, "lean": -0.05, "upperarm_r": Vector3(-0.7, 0.65, -0.2), "lowerarm_r": Vector3(-0.2, 0.85, -0.45), "blade_r": Vector3(-0.35, 0.55, -0.75)}],
-		[0.11, {"twist": -0.15, "upperarm_r": Vector3(-0.45, 0.5, 0.72), "lowerarm_r": Vector3(-0.05, 0.45, 0.9), "blade_r": Vector3(0.15, 0.8, 0.55)}],
-		[0.2, {"twist": 0.2, "lean": 0.1, "upperarm_r": Vector3(-0.1, 0.0, 1.0), "lowerarm_r": Vector3(0.35, -0.3, 0.88), "blade_r": Vector3(0.55, -0.45, 0.7)}],
-		[0.32, {"twist": 0.45, "lean": 0.15, "upperarm_r": Vector3(0.3, -0.55, 0.78), "lowerarm_r": Vector3(0.75, -0.6, 0.3), "blade_r": Vector3(0.75, -0.65, -0.1)}],
+		[0.0, {"hips": -0.3, "twist": -0.45, "lean": -0.08, "shift": Vector3(-0.02, 0.0, -0.05), "sink": 0.03,
+			"upperarm_r": Vector3(-0.7, 0.65, -0.2), "lowerarm_r": Vector3(-0.2, 0.85, -0.45), "blade_r": Vector3(-0.35, 0.55, -0.75),
+			"upperarm_l": Vector3(0.3, -0.45, 0.85), "lowerarm_l": Vector3(-0.1, 0.1, 1.0)}],
+		[0.11, {"hips": -0.08, "twist": -0.15, "lean": 0.05, "shift": Vector3(0.0, 0.0, 0.03), "sink": 0.05, "step": Vector3(0.0, 0.06, 0.1),
+			"upperarm_r": Vector3(-0.45, 0.5, 0.72), "lowerarm_r": Vector3(-0.05, 0.45, 0.9), "blade_r": Vector3(0.15, 0.8, 0.55),
+			"upperarm_l": Vector3(0.4, -0.6, 0.65), "lowerarm_l": Vector3(0.05, -0.15, 1.0)}],
+		[0.2, {"hips": 0.22, "twist": 0.2, "lean": 0.22, "pitch": 0.06, "shift": Vector3(0.03, 0.0, 0.15), "sink": 0.13, "step": Vector3(0.0, 0.0, 0.2),
+			"upperarm_r": Vector3(-0.1, 0.0, 1.0), "lowerarm_r": Vector3(0.35, -0.3, 0.88), "blade_r": Vector3(0.55, -0.45, 0.7),
+			"upperarm_l": Vector3(0.55, -0.8, 0.1), "lowerarm_l": Vector3(0.3, -0.6, 0.75)}],
+		[0.32, {"hips": 0.35, "twist": 0.45, "lean": 0.3, "pitch": 0.1, "shift": Vector3(0.03, 0.0, 0.18), "sink": 0.16, "step": Vector3(0.0, 0.0, 0.2),
+			"upperarm_r": Vector3(0.3, -0.55, 0.78), "lowerarm_r": Vector3(0.75, -0.6, 0.3), "blade_r": Vector3(0.75, -0.65, -0.1),
+			"upperarm_l": Vector3(0.6, -0.7, -0.35), "lowerarm_l": Vector3(0.45, -0.75, 0.5)}],
 	]
-	var out := {"a": a, "b": backhand, "c": c}
+	# The last blow holds its end for a moment, then the front foot steps back under the body
+	# while the arms stay where the cut left them.
+	var spent: Dictionary = c[3][1]
+	c.append([0.41, spent])
+	c.append([0.48, _with(spent, {"hips": 0.22, "lean": 0.2, "pitch": 0.06, "shift": Vector3(0.02, 0.0, 0.1), "sink": 0.1, "step": Vector3(0.0, 0.05, 0.1)})])
+	c.append([0.55, _with(spent, {"hips": 0.1, "lean": 0.1, "pitch": 0.02, "shift": Vector3(0.0, 0.0, 0.03), "sink": 0.04, "step": Vector3.ZERO})])
+	# The first blow made off the ground: the body arches back with the weapon high and the legs
+	# trailing, then folds forward and brings the weapon down as the knees come up in front and
+	# the legs reach for the ground. Here the legs are not held by the feet; each thigh and shin
+	# points the way given.
+	var air := [
+		[0.0, {"hips": -0.15, "pitch": -0.12, "twist": -0.2, "lean": -0.3,
+			"upperarm_r": Vector3(-0.35, 0.9, -0.15), "lowerarm_r": Vector3(0.15, 0.6, -0.78), "blade_r": Vector3(0.05, 0.35, -0.93),
+			"upperarm_l": Vector3(0.3, 0.3, 0.9), "lowerarm_l": Vector3(0.0, 0.5, 0.87),
+			"thigh_r": Vector3(-0.08, -0.9, -0.42), "calf_r": Vector3(0.0, -0.3, -0.95),
+			"thigh_l": Vector3(0.1, -0.97, 0.2), "calf_l": Vector3(0.0, -0.55, -0.83)}],
+		[0.07, {"hips": -0.08, "pitch": -0.08, "twist": -0.12, "lean": -0.2,
+			"upperarm_r": Vector3(-0.15, 0.85, 0.5), "lowerarm_r": Vector3(0.12, 0.8, 0.58), "blade_r": Vector3(0.08, 0.99, 0.1),
+			"upperarm_l": Vector3(0.35, 0.05, 0.93), "lowerarm_l": Vector3(0.05, 0.3, 0.95),
+			"thigh_r": Vector3(-0.08, -0.95, -0.3), "calf_r": Vector3(0.0, -0.35, -0.94),
+			"thigh_l": Vector3(0.1, -0.9, 0.42), "calf_l": Vector3(0.0, -0.6, -0.8)}],
+		[0.13, {"hips": 0.08, "pitch": 0.08, "twist": 0.05, "lean": 0.15,
+			"upperarm_r": Vector3(-0.08, 0.3, 0.95), "lowerarm_r": Vector3(0.15, 0.0, 0.99), "blade_r": Vector3(0.08, 0.2, 0.97),
+			"upperarm_l": Vector3(0.45, -0.5, 0.55), "lowerarm_l": Vector3(0.2, -0.3, 0.93),
+			"thigh_r": Vector3(-0.1, -0.85, 0.3), "calf_r": Vector3(0.0, -0.7, -0.7),
+			"thigh_l": Vector3(0.1, -0.7, 0.7), "calf_l": Vector3(0.0, -0.8, -0.6)}],
+		[0.19, {"hips": 0.2, "pitch": 0.2, "twist": 0.15, "lean": 0.42,
+			"upperarm_r": Vector3(-0.03, -0.3, 0.95), "lowerarm_r": Vector3(0.2, -0.68, 0.7), "blade_r": Vector3(0.1, -0.55, 0.83),
+			"upperarm_l": Vector3(0.55, -0.75, -0.2), "lowerarm_l": Vector3(0.35, -0.7, 0.6),
+			"thigh_r": Vector3(-0.12, -0.6, 0.79), "calf_r": Vector3(-0.03, -0.88, -0.47),
+			"thigh_l": Vector3(0.12, -0.45, 0.88), "calf_l": Vector3(0.03, -0.8, -0.6)}],
+		[0.3, {"hips": 0.22, "pitch": 0.2, "twist": 0.2, "lean": 0.5,
+			"upperarm_r": Vector3(0.0, -0.78, 0.63), "lowerarm_r": Vector3(0.2, -0.93, 0.3), "blade_r": Vector3(0.12, -0.9, 0.42),
+			"upperarm_l": Vector3(0.55, -0.7, -0.45), "lowerarm_l": Vector3(0.4, -0.8, 0.45),
+			"thigh_r": Vector3(-0.1, -0.9, 0.42), "calf_r": Vector3(-0.02, -0.98, -0.2),
+			"thigh_l": Vector3(0.12, -0.8, 0.6), "calf_l": Vector3(0.02, -0.95, -0.3)}],
+	]
+	var out := {"a": a, "b": backhand, "c": c, "air": air}
 	if side == "l":
-		out = {"a": _mirror_keys(a), "b": _mirror_keys(forehand), "c": _mirror_keys(c)}
+		out = {"a": _mirror_keys(a), "b": _mirror_keys(forehand), "c": _mirror_keys(c), "air": _mirror_keys(air)}
 	for blow in out:
 		# Hold the last pose to the end of the move; the one-shot then fades back to the walk.
 		var keys: Array = out[blow]
-		var length: float = BLOWS[["a", "b", "c"].find(blow)]["length"]
-		keys.append([length, keys[keys.size() - 1][1]])
+		var length: float = BLOWS[maxi(0, ["a", "b", "c"].find(blow))]["length"]
+		if float(keys[keys.size() - 1][0]) < length - 0.001:
+			keys.append([length, keys[keys.size() - 1][1]])
+	return out
+
+
+## A pose with some of its values changed.
+static func _with(pose: Dictionary, changes: Dictionary) -> Dictionary:
+	var out := pose.duplicate()
+	for key in changes:
+		out[key] = changes[key]
 	return out
 
 
 ## The same poses for the other side of the body: right and left swapped, directions mirrored.
+## The feet are not swapped: the left one is in front whichever hand strikes.
 static func _mirror_keys(keys: Array) -> Array:
 	var out: Array = []
 	for k in keys:
@@ -1441,7 +1582,7 @@ static func _mirror_keys(keys: Array) -> Array:
 				name = name.trim_suffix("_l") + "_r"
 			if v is Vector3:
 				m[name] = Vector3(-v.x, v.y, v.z)
-			elif name == "twist":
+			elif name == "twist" or name == "hips":
 				m[name] = -float(v)
 			else:
 				m[name] = v
@@ -1449,17 +1590,20 @@ static func _mirror_keys(keys: Array) -> Array:
 	return out
 
 
-## An upper-body clip made from arm poses. Each key is [time, {bone: direction}]: the bone is
-## turned from its pose in `base` so that it points that way (model space). Everything else in
-## the upper body keeps its pose from `base`, except that the right hand is closed as in `fist`.
-## A key may also hold "twist" and "lean" for the chest, and "blade_r" / "blade_l": the way
-## something held in that fist should point (see _grip).
-static func _aimed(sk: Skeleton3D, base: Animation, fist: Animation, keys: Array) -> Animation:
+## A clip made from poses. Each key is [time, {bone: direction}]: the bone is turned from its pose
+## in `base` so that it points that way (model space). Everything else keeps its pose from `base`,
+## except that the right hand is closed as in `fist`. A key may also hold "twist" and "lean" for
+## the chest, and "blade_r" / "blade_l": the way something held in that fist should point (see
+## _grip). With `whole_body` the clip also moves the hips and legs (see _stand); without it, it
+## holds the upper body only.
+static func _aimed(sk: Skeleton3D, base: Animation, fist: Animation, keys: Array, whole_body: bool = false) -> Animation:
 	var names: Array = UPPER_BODY.duplicate()
 	for side in ["l", "r"]:
 		for finger in FINGERS:
 			for joint in 3:
 				names.append("%s_0%d_%s" % [finger, joint + 1, side])
+	if whole_body:
+		names.append_array(LOWER_BODY)
 	var out := Animation.new()
 	out.loop_mode = Animation.LOOP_NONE
 	var tracks := {}
@@ -1468,6 +1612,16 @@ static func _aimed(sk: Skeleton3D, base: Animation, fist: Animation, keys: Array
 			var track := out.add_track(Animation.TYPE_ROTATION_3D)
 			out.track_set_path(track, NodePath("Armature/Skeleton3D:%s" % n))
 			tracks[n] = track
+	# Where the hips are in `base`, in the space of the bone above them.
+	var pelvis_path := NodePath("Armature/Skeleton3D:pelvis")
+	var pelvis_at := sk.get_bone_rest(sk.find_bone("pelvis")).origin
+	var base_place := base.find_track(pelvis_path, Animation.TYPE_POSITION_3D)
+	if base_place >= 0:
+		pelvis_at = base.position_track_interpolate(base_place, 0.0)
+	var place := -1
+	if whole_body:
+		place = out.add_track(Animation.TYPE_POSITION_3D)
+		out.track_set_path(place, pelvis_path)
 	var child_of := {"upperarm_r": "lowerarm_r", "lowerarm_r": "hand_r", "upperarm_l": "lowerarm_l", "lowerarm_l": "hand_l"}
 	# The way out of each fist on the thumb side, in hand space: what "blade_*" aims.
 	var grips := {"r": fist_frame(sk, fist, 0.46, "r").basis.y, "l": fist_frame(sk, base, 0.0, "l").basis.y}
@@ -1481,14 +1635,22 @@ static func _aimed(sk: Skeleton3D, base: Animation, fist: Animation, keys: Array
 				if fb >= 0:
 					local[fb] = _anim_basis(fist, sk, fb, 0.46)
 		var aims: Dictionary = key[1]
-		# The chest turns and bends, a third at each spine bone; the head turns back to the front.
+		var turned := 0.0   # how far the hips have turned and bent the body above them
+		var bent := 0.0
+		if whole_body:
+			out.position_track_insert_key(place, float(key[0]), _stand(sk, local, pelvis_at, aims))
+			turned = float(aims.get("hips", 0.0))
+			bent = float(aims.get("pitch", 0.0))
+		# The chest turns and bends, a third at each spine bone; the head turns back to the front
+		# and lifts, so the eyes stay on what is being struck.
 		var tw := float(aims.get("twist", 0.0))
 		var ln := float(aims.get("lean", 0.0))
 		if tw != 0.0 or ln != 0.0:
 			var r := Basis(Vector3.UP, tw / 3.0) * Basis(Vector3.RIGHT, ln / 3.0)
 			for n in ["spine_01", "spine_02", "spine_03"]:
 				_turn(sk, local, sk.find_bone(n), r)
-			_turn(sk, local, sk.find_bone("neck_01"), Basis(Vector3.UP, -tw * 0.6))
+		if tw + turned != 0.0 or ln + bent != 0.0:
+			_turn(sk, local, sk.find_bone("neck_01"), Basis(Vector3.UP, -(tw + turned) * 0.6) * Basis(Vector3.RIGHT, -maxf(ln + bent, 0.0) * 0.45))
 		for n in ["upperarm_r", "lowerarm_r", "upperarm_l", "lowerarm_l"]:
 			if not aims.has(n):
 				continue
@@ -1507,7 +1669,131 @@ static func _aimed(sk: Skeleton3D, base: Animation, fist: Animation, keys: Array
 				_grip(sk, local, side, grips[side], (aims["blade_" + side] as Vector3).normalized())
 		for n in tracks:
 			out.rotation_track_insert_key(tracks[n], float(key[0]), (local[sk.find_bone(n)] as Basis).get_rotation_quaternion())
+	# Between two poses the bones turn evenly, which lets a planted foot drift a little while
+	# the hips travel. The hips and legs get one more pose halfway to hold the feet down.
+	if whole_body:
+		for i in keys.size() - 1:
+			var here: Dictionary = keys[i][1]
+			var next: Dictionary = keys[i + 1][1]
+			if here.has("thigh_r") or here.has("thigh_l") or next.has("thigh_r") or next.has("thigh_l"):
+				continue
+			var half := {}
+			for n in ["hips", "pitch", "sink"]:
+				half[n] = (float(here.get(n, 0.0)) + float(next.get(n, 0.0))) * 0.5
+			for n in ["shift", "step"]:
+				half[n] = ((here.get(n, Vector3.ZERO) as Vector3) + (next.get(n, Vector3.ZERO) as Vector3)) * 0.5
+			var local := {}
+			for b in sk.get_bone_count():
+				local[b] = _anim_basis(base, sk, b, 0.0)
+			var time := (float(keys[i][0]) + float(keys[i + 1][0])) * 0.5
+			out.position_track_insert_key(place, time, _stand(sk, local, pelvis_at, half))
+			for n in LOWER_BODY:
+				out.rotation_track_insert_key(tracks[n], time, (local[sk.find_bone(n)] as Basis).get_rotation_quaternion())
 	out.length = float(keys[keys.size() - 1][0])
+	return out
+
+
+## Moves the hips of a pose and bends the legs so that the feet stay where they stand. `local`
+## holds the pose (bone -> local orientation) and is changed; `at` is where the pelvis is in it,
+## in the space of the bone above. Returns where the pelvis goes, in that same space.
+## From `aims`, all in model space: "hips" turns the pelvis (+ to the left), "pitch" bends it
+## forward, "shift" moves it and "sink" lowers it (metres); "step" moves the front (left) foot
+## from its place. The rear (right) heel comes off the ground as that hip turns and drives
+## forward, and either heel rises as far as it must for the leg to reach the hip.
+## A leg given a "thigh_r" / "thigh_l" (and "calf_*") direction is off the ground instead: thigh
+## and shin point that way and the foot goes where they take it.
+static func _stand(sk: Skeleton3D, local: Dictionary, at: Vector3, aims: Dictionary) -> Vector3:
+	var pelvis := sk.find_bone("pelvis")
+	var above := _model_pose(sk, local, at, sk.get_bone_parent(pelvis))
+	var before := above * Transform3D(local[pelvis] as Basis, at)
+	# Where the legs are before anything moves.
+	var legs := {}
+	for side in ["l", "r"]:
+		var leg := {}
+		for part in ["thigh", "calf", "foot", "ball"]:
+			leg[part] = _model_pose(sk, local, at, sk.find_bone("%s_%s" % [part, side]))
+		legs[side] = leg
+	var hips := float(aims.get("hips", 0.0))
+	var shift: Vector3 = aims.get("shift", Vector3.ZERO)
+	var turn := Basis(Vector3.UP, hips) * Basis(Vector3.RIGHT, float(aims.get("pitch", 0.0)))
+	var after := Transform3D(turn * before.basis, before.origin + shift - Vector3(0.0, float(aims.get("sink", 0.0)), 0.0))
+	var placed := above.affine_inverse() * after
+	local[pelvis] = placed.basis
+	for side in ["l", "r"]:
+		var leg: Dictionary = legs[side]
+		var thigh := sk.find_bone("thigh_" + side)
+		var calf := sk.find_bone("calf_" + side)
+		var foot := sk.find_bone("foot_" + side)
+		var ball := sk.find_bone("ball_" + side)
+		var hip0: Vector3 = (leg["thigh"] as Transform3D).origin
+		var knee0: Vector3 = (leg["calf"] as Transform3D).origin
+		var ankle0: Vector3 = (leg["foot"] as Transform3D).origin
+		var toe0: Vector3 = (leg["ball"] as Transform3D).origin
+		if aims.has("thigh_" + side):
+			var thigh_free := _lie_along((leg["thigh"] as Transform3D).basis, sk.get_bone_rest(calf).origin, aims["thigh_" + side] as Vector3)
+			var shin: Vector3 = aims.get("calf_" + side, Vector3.DOWN)
+			var calf_free := _lie_along((leg["calf"] as Transform3D).basis, sk.get_bone_rest(foot).origin, shin)
+			local[thigh] = after.basis.inverse() * thigh_free
+			local[calf] = thigh_free.inverse() * calf_free
+			continue
+		var moved := Vector3.ZERO
+		if side == "l":
+			moved = aims.get("step", Vector3.ZERO)
+		var hip: Vector3 = after * sk.get_bone_rest(thigh).origin
+		var upper := sk.get_bone_rest(calf).origin.length()
+		var lower := sk.get_bone_rest(foot).origin.length()
+		# The heel turns up about the ball of the foot, which stays on the ground.
+		var ahead := Vector3(toe0.x - ankle0.x, 0.0, toe0.z - ankle0.z).normalized()
+		var hinge := Vector3.UP.cross(ahead).normalized()
+		var lift := 0.0
+		if side == "r":
+			lift = clampf(hips * 1.2 + shift.z * 2.5, 0.0, 0.6)
+		var ankle := ankle0 + moved
+		while true:
+			ankle = toe0 + moved + Basis(hinge, lift) * (ankle0 - toe0)
+			if hip.distance_to(ankle) <= (upper + lower) * 0.995 or lift >= 1.0:
+				break
+			lift += 0.05
+		# The knee: where a leg of these two lengths bends between hip and ankle, on the side it
+		# bends to in the pose we started from.
+		var to := ankle - hip
+		var d := clampf(to.length(), absf(upper - lower) + 0.01, (upper + lower) * 0.999)
+		var dir := to.normalized()
+		var along := (upper * upper - lower * lower + d * d) / (2.0 * d)
+		var out_by := sqrt(maxf(upper * upper - along * along, 0.0))
+		var line := (ankle0 - hip0).normalized()
+		var bend := (knee0 - hip0) - line * (knee0 - hip0).dot(line)
+		if bend.length() < 0.01:
+			bend = ahead
+		bend -= dir * bend.dot(dir)
+		var knee := hip + dir * along + bend.normalized() * out_by
+		# Thigh and shin turn to lie along the new leg, keeping the roll they had over the foot;
+		# the foot tips up on its ball, and the toes stay flat.
+		var thigh_m := _lie_along((leg["thigh"] as Transform3D).basis, sk.get_bone_rest(calf).origin, knee - hip)
+		var calf_m := _lie_along((leg["calf"] as Transform3D).basis, sk.get_bone_rest(foot).origin, ankle - knee)
+		var foot_m := Basis(hinge, lift) * (leg["foot"] as Transform3D).basis
+		local[thigh] = after.basis.inverse() * thigh_m
+		local[calf] = thigh_m.inverse() * calf_m
+		local[foot] = calf_m.inverse() * foot_m
+		local[ball] = foot_m.inverse() * (leg["ball"] as Transform3D).basis
+	return placed.origin
+
+
+## An orientation (model space) turned the short way so that its direction `along` (in its own
+## space) points the way `want`.
+static func _lie_along(held: Basis, along: Vector3, want: Vector3) -> Basis:
+	return Basis(Quaternion((held * along).normalized(), want.normalized())) * held
+
+
+## Where a bone is in model space, from the local orientations in `local`, the rest offsets of
+## the bones, and the place of the pelvis (`pelvis_at`, in the space of the bone above it).
+static func _model_pose(sk: Skeleton3D, local: Dictionary, pelvis_at: Vector3, bone: int) -> Transform3D:
+	var pelvis := sk.find_bone("pelvis")
+	var out := Transform3D.IDENTITY
+	var b := bone
+	while b >= 0:
+		out = Transform3D(local[b] as Basis, pelvis_at if b == pelvis else sk.get_bone_rest(b).origin) * out
+		b = sk.get_bone_parent(b)
 	return out
 
 
@@ -1596,9 +1882,14 @@ func _setup_animation(sex: int) -> void:
 	walk.add_blend_point(_clip("Jog_Fwd"), 5.5, -1, &"jog")
 	walk.add_blend_point(_clip("Sprint"), 9.5, -1, &"sprint")
 	graph.add_node("walk", walk)
+	# Off the ground the whole body goes over to the kit's jump pose.
+	graph.add_node("air", AnimationNodeBlend2.new())
+	graph.add_node("Jump", _clip("Jump"))
+	graph.connect_node("air", 0, "walk")
+	graph.connect_node("air", 1, "Jump")
 	var upper := _upper_paths()
 	# Poses held for as long as a button is: the sling going round, the bow drawn.
-	var below := "walk"
+	var below := "air"
 	for held in [["whirl_hold", "Sling_Whirl"], ["draw_hold", "Bow_Draw"]]:
 		var blend := AnimationNodeBlend2.new()
 		blend.filter_enabled = true
@@ -1634,7 +1925,10 @@ func _setup_animation(sex: int) -> void:
 		graph.add_node(shot, one)
 		var source: String = s[1]
 		if not graph.has_node(source):
-			graph.add_node(source, _clip(source))
+			var made := _clip(source)
+			graph.add_node(source, made)
+			if source == "Blow_A_R" or source == "Blow_A_L":
+				_first_blow[source.right(1).to_lower()] = made
 		if shot.begins_with("blow") or shot == "punch":
 			graph.add_node(shot + "_speed", AnimationNodeTimeScale.new())
 			graph.connect_node(shot + "_speed", 0, source)
@@ -1642,6 +1936,39 @@ func _setup_animation(sex: int) -> void:
 		graph.connect_node(shot, 0, below)
 		graph.connect_node(shot, 1, source)
 		below = shot
+	# The hips and legs of a blow made standing still or off the ground, and of a landing. Two
+	# one-shots are used in turn and given the clip each time, so one stance fades into the next.
+	_stance_clips.clear()
+	for i in 2:
+		var stance := "stance_%d" % i
+		var one := AnimationNodeOneShot.new()
+		one.fadein_time = 0.05
+		one.fadeout_time = 0.15
+		one.filter_enabled = true
+		for bone in LOWER_BODY:
+			one.set_filter_path(NodePath("Armature/Skeleton3D:%s" % bone), true)
+		graph.add_node(stance, one)
+		var clip := _clip("Blow_A_R")
+		_stance_clips.append(clip)
+		graph.add_node(stance + "_clip", clip)
+		graph.add_node(stance + "_speed", AnimationNodeTimeScale.new())
+		graph.connect_node(stance + "_speed", 0, stance + "_clip")
+		graph.connect_node(stance, 0, below)
+		graph.connect_node(stance, 1, stance + "_speed")
+		below = stance
+	# Landing has a one-shot of its own, laid over whatever else the legs are doing, so the feet
+	# are on the ground at once.
+	var land := AnimationNodeOneShot.new()
+	land.fadein_time = 0.05
+	land.fadeout_time = 0.15
+	land.filter_enabled = true
+	for bone in LOWER_BODY:
+		land.set_filter_path(NodePath("Armature/Skeleton3D:%s" % bone), true)
+	graph.add_node("land", land)
+	graph.add_node("Land", _clip("Land"))
+	graph.connect_node("land", 0, below)
+	graph.connect_node("land", 1, "Land")
+	below = "land"
 	graph.connect_node("output", 0, below)
 
 	_tree = AnimationTree.new()
@@ -1655,6 +1982,15 @@ func _setup_animation(sex: int) -> void:
 	for s in shots:
 		if str(s[0]).begins_with("blow") or s[0] == "punch":
 			_tree.set("parameters/%s_speed/scale" % s[0], 1.0)
+	for i in 2:
+		_tree.set("parameters/stance_%d_speed/scale" % i, 1.0)
+	_legs = ""
+	_legs_left = 0.0
+	_land_left = 0.0
+	_in_air = false
+	_air_time = 0.0
+	_air = 0.0
+	_tree.set("parameters/air/blend_amount", 0.0)
 	_tree.set("parameters/walk/blend_position", 0.0)
 	_tree.advance(0.0)
 
@@ -1663,14 +1999,39 @@ var _whirl_blend := 0.0
 var _draw_blend := 0.0
 
 
-## Call every frame with the horizontal speed in metres per second (0 when standing).
-func animate(delta: float, speed: float) -> void:
+## Call every frame with the horizontal speed in metres per second (0 when standing), and
+## whether the figure is off the ground (jumping or falling).
+func animate(delta: float, speed: float, airborne: bool = false) -> void:
 	if _tree == null or dead or posed:
 		return
 	_speed = lerpf(_speed, speed, 1.0 - exp(-10.0 * delta))
 	_tree.set("parameters/walk/blend_position", _speed)
 	if _strike_left > 0.0:
 		_strike_left -= delta
+	# Off the ground the body takes the jump pose; coming down from a real jump, a figure that
+	# stands still takes the landing on its knees.
+	var flown := _air_time
+	_air_time = _air_time + delta if airborne else 0.0
+	var landed := _in_air and not airborne
+	_in_air = airborne
+	_air = move_toward(_air, 1.0 if _in_air else 0.0, delta * (10.0 if _in_air else 7.0))
+	_tree.set("parameters/air/blend_amount", _air)
+	if _legs_left > 0.0:
+		_legs_left -= delta
+		if _legs_left <= 0.0:
+			_legs = ""
+	if _land_left > 0.0:
+		_land_left -= delta
+	if landed:
+		_legs_stop()
+		if flown >= LAND_AFTER and _speed < PLANT_SPEED:
+			_play("land")
+			_land_left = _player.get_animation("Land").length
+	elif _in_air or _speed > UNPLANT_SPEED:
+		# A stance taken standing still: once the figure moves off or jumps, the legs let go of it.
+		if _legs == "blow":
+			_legs_stop()
+		_land_stop()
 	# What each hand holds turns smoothly between how it is carried and how it is gripped for a
 	# blow (or, for a bow, held up to shoot), so it never jumps out of the fist.
 	var k := 1.0 - exp(-28.0 * delta)
@@ -1725,21 +2086,63 @@ func swing() -> void:
 
 ## Blow `step` of a combo (see BLOWS), made with the right hand ("r") or the left ("l"), at
 ## `speed` (1 = normal). A hand with no weapon punches. A blow that follows another takes over.
+## A figure standing still puts its hips and legs into the blow; one on the move keeps walking
+## and strikes with the upper body only. Off the ground the first blow is a different one: the
+## weapon comes down from overhead with the whole body folding behind it.
 func attack(step: int, side: String = "r", speed: float = 1.0) -> void:
 	if _tree == null or dead:
 		return
-	var m: Dictionary = BLOWS[clampi(step, 0, BLOWS.size() - 1)]
+	step = clampi(step, 0, BLOWS.size() - 1)
+	var m: Dictionary = BLOWS[step]
 	var held := weapon_kind if side == "r" else offhand_kind
 	var armed := is_weapon(held)
 	var shot := "%s_%s" % [m["shot"], side] if armed else "punch"
+	var leap := armed and _in_air and step == 0
+	var clip := "Blow_%s_%s" % ["Air" if leap else str(m["shot"]).right(1).to_upper(), side.to_upper()]
+	if armed and step == 0:
+		(_first_blow[side] as AnimationNodeAnimation).animation = clip
 	if _shot != "" and _shot != shot:
 		_tree.set("parameters/%s/request" % _shot, AnimationNodeOneShot.ONE_SHOT_REQUEST_FADE_OUT)
 	_tree.set("parameters/%s_speed/scale" % shot, speed)
 	_play(shot)
 	_shot = shot
 	_strike_side = side
+	if leap:
+		_legs_play(clip, speed, "air")
+	elif armed and not _in_air and _speed < PLANT_SPEED:
+		_land_stop()
+		_legs_play(clip, speed, "blow")
+	else:
+		_legs_stop()
 	if armed:
 		_strike_left = float(m["length"]) / speed
+
+
+## Plays the hips and legs of `clip` over the walk, taking over from whatever stance was there.
+## `what` says what it is for (see _legs).
+func _legs_play(clip: String, speed: float, what: String) -> void:
+	_legs_stop()
+	_stance = 1 - _stance
+	(_stance_clips[_stance] as AnimationNodeAnimation).animation = clip
+	_tree.set("parameters/stance_%d_speed/scale" % _stance, speed)
+	_play("stance_%d" % _stance)
+	_legs = what
+	_legs_left = _player.get_animation(clip).length / speed
+
+
+## Lets the hips and legs go back to walking, standing or the jump pose.
+func _legs_stop() -> void:
+	if _legs != "":
+		_tree.set("parameters/stance_%d/request" % _stance, AnimationNodeOneShot.ONE_SHOT_REQUEST_FADE_OUT)
+	_legs = ""
+	_legs_left = 0.0
+
+
+## Lets the knees come up from a landing early.
+func _land_stop() -> void:
+	if _land_left > 0.0:
+		_tree.set("parameters/land/request", AnimationNodeOneShot.ONE_SHOT_REQUEST_FADE_OUT)
+	_land_left = 0.0
 
 
 func _play(shot: String) -> void:

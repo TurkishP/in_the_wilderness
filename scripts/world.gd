@@ -17,6 +17,8 @@ extends Node3D
 ##   --look=sex:1,hair:2    set the player's appearance
 ##   --equip=ID,ID          put on gear (--arrows=N adds arrows)
 ##   --aim=sling|bow        hold the sling going round, or the bow drawn (screenshots)
+##   --blow=N --view=DEG    strike N blows of the combo and stop in the middle of the last one,
+##                          with the camera swung DEG round the figure (screenshots)
 ##   --tip=N                point at the Nth thing in the bag to show what it does (screenshots)
 ##   --home                 start inside the scout's own tent
 ##   --sheathe              start with the weapon put away
@@ -1057,6 +1059,21 @@ func _shot() -> void:
 		inv.queue_redraw()
 	for i in int(args.get("frames", "90")):
 		await get_tree().process_frame
+	if args.has("blow"):
+		# --blow=N: strike the first N blows of the combo and stop in the middle of the last one.
+		# --view=DEG then swings the camera round the figure, which keeps facing the way it strikes.
+		var last := clampi(int(args["blow"]), 1, HumanScript.BLOWS.size()) - 1
+		for i in 600:
+			if int(player.combo) >= last:
+				break
+			player.melee()
+			await get_tree().process_frame
+		player.yaw += deg_to_rad(float(args.get("view", "0")))
+		var until: float = (float(HumanScript.BLOWS[last]["hit"]) + 0.06) / float(player._blow_speed)
+		for i in 600:
+			if int(player.combo) != last or float(player._combo_t) >= until:
+				break
+			await get_tree().process_frame
 	get_viewport().get_texture().get_image().save_png(str(args["shot"]))
 	get_tree().quit()
 
@@ -1231,7 +1248,82 @@ func _selftest() -> void:
 	var hand_now: Transform3D = chopper.skeleton.global_transform * chopper.skeleton.get_bone_global_pose(chopper.skeleton.find_bone("hand_r"))
 	var cut: Vector3 = (hand_now.basis * chopper._strike.basis.y).normalized()
 	check.call(cut.z < -0.3 and cut.y < 0.2, "blow A brings the blade down in front (%s)" % cut)
+	# The whole body goes into a blow made standing still: every clip turns the hips, bends the
+	# knees and keeps the feet where they stand (only the front foot steps, in the last blow).
+	var rig: Skeleton3D = chopper.skeleton
+	var rest_pose: Animation = HumanScript._libraries[0].get_animation("Idle")
+	var hips_bone := rig.find_bone("pelvis")
+	var toes_r := rig.find_bone("ball_r")
+	var toes_l := rig.find_bone("ball_l")
+	var hips_stood: Transform3D = HumanScript.pose_transform(rest_pose, rig, hips_bone, 0.0)
+	var toes_r_stood: Vector3 = HumanScript.pose_transform(rest_pose, rig, toes_r, 0.0).origin
+	var toes_l_stood: Vector3 = HumanScript.pose_transform(rest_pose, rig, toes_l, 0.0).origin
+	var blows_ok := true
+	var blow_note := ""
+	for clip_name in ["Blow_A_R", "Blow_B_R", "Blow_C_R", "Blow_A_L", "Blow_B_L", "Blow_C_L"]:
+		var clip: Animation = HumanScript._libraries[0].get_animation(clip_name)
+		var hip_turn := 0.0
+		var hip_drop := 0.0
+		var slip := 0.0
+		var t := 0.0
+		while t <= clip.length:
+			var hips_now: Transform3D = HumanScript.pose_transform(clip, rig, hips_bone, t, rest_pose)
+			hip_turn = maxf(hip_turn, absf(angle_difference(atan2(-hips_stood.basis.x.z, hips_stood.basis.x.x), atan2(-hips_now.basis.x.z, hips_now.basis.x.x))))
+			hip_drop = maxf(hip_drop, hips_stood.origin.y - hips_now.origin.y)
+			slip = maxf(slip, HumanScript.pose_transform(clip, rig, toes_r, t, rest_pose).origin.distance_to(toes_r_stood))
+			if not clip_name.contains("_C_"):
+				slip = maxf(slip, HumanScript.pose_transform(clip, rig, toes_l, t, rest_pose).origin.distance_to(toes_l_stood))
+			t += 1.0 / 60.0
+		if hip_turn < 0.2 or hip_drop < 0.05 or slip > 0.01:
+			blows_ok = false
+			blow_note += " %s: turn %.2f drop %.3f slip %.3f" % [clip_name, hip_turn, hip_drop, slip]
+	check.call(blows_ok, "each blow turns the hips, bends the knees and keeps the feet planted" + blow_note)
+	# Standing, the hips go into the blow; on the run the legs keep running.
+	chopper.attack(2, "r", 1.0)
+	check.call(chopper._legs == "blow", "a figure standing still puts its legs into a blow")
+	for i in 16:
+		chopper.animate(1.0 / 60.0, 0.0)
+		chopper._tree.advance(1.0 / 60.0)
+	var hips_struck: Vector3 = rig.get_bone_global_pose(hips_bone).origin
+	check.call(hips_stood.origin.y - hips_struck.y > 0.08 and hips_struck.z - hips_stood.origin.z > 0.08, "the hips drop and drive forward with the blow (%s to %s)" % [hips_stood.origin, hips_struck])
+	for i in 30:
+		chopper.animate(1.0 / 60.0, 6.0)
+	chopper.attack(0, "r", 1.0)
+	check.call(chopper._legs == "", "a figure on the run strikes with the upper body only")
 	chopper.queue_free()
+	# Off the ground: the jump pose, the downward blow with the knees drawn up, and the landing.
+	var leaper = HumanScript.new()
+	add_child(leaper)
+	leaper.build({"sex": 0})
+	leaper.set_hands("sword", "none")
+	var limbs: Skeleton3D = leaper.skeleton
+	var knee_l := limbs.find_bone("calf_l")
+	var knee_r := limbs.find_bone("calf_r")
+	var knee_stood: float = limbs.get_bone_global_pose(knee_l).origin.y
+	for i in 24:
+		leaper.animate(1.0 / 60.0, 0.0, true)
+		leaper._tree.advance(1.0 / 60.0)
+	check.call(limbs.get_bone_global_pose(knee_l).origin.y - knee_stood > 0.08, "off the ground a knee comes up (%.2f)" % (limbs.get_bone_global_pose(knee_l).origin.y - knee_stood))
+	leaper.attack(0, "r", 1.0)
+	check.call(leaper._legs == "air" and str((leaper._first_blow["r"] as AnimationNodeAnimation).animation) == "Blow_Air_R", "the first blow off the ground is the downward one")
+	for i in 12:
+		leaper.animate(1.0 / 60.0, 0.0, true)
+		leaper._tree.advance(1.0 / 60.0)
+	var grip_now: Transform3D = limbs.global_transform * limbs.get_bone_global_pose(limbs.find_bone("hand_r"))
+	var down_cut: Vector3 = (grip_now.basis * leaper._strike.basis.y).normalized()
+	check.call(down_cut.z < -0.3 and down_cut.y < 0.0, "it brings the blade down in front (%s)" % down_cut)
+	var hips_in_air: Vector3 = limbs.get_bone_global_pose(hips_bone).origin
+	check.call(limbs.get_bone_global_pose(knee_r).origin.z - hips_in_air.z > 0.15 and limbs.get_bone_global_pose(knee_l).origin.z - hips_in_air.z > 0.15, "with both knees drawn up in front of the hips")
+	leaper.animate(1.0 / 60.0, 0.0, false)
+	check.call(leaper._land_left > 0.0 and leaper._legs == "", "coming down from a jump, the legs take the landing")
+	for i in 8:
+		leaper._tree.advance(1.0 / 60.0)
+		leaper.animate(1.0 / 60.0, 0.0, false)
+	check.call(hips_stood.origin.y - limbs.get_bone_global_pose(hips_bone).origin.y > 0.1, "the hips sink as the knees give (%.2f)" % (hips_stood.origin.y - limbs.get_bone_global_pose(hips_bone).origin.y))
+	check.call(limbs.get_bone_global_pose(toes_r).origin.distance_to(toes_r_stood) < 0.03 and limbs.get_bone_global_pose(toes_l).origin.distance_to(toes_l_stood) < 0.03, "and the feet are back where they stand")
+	leaper.attack(0, "r", 1.0)
+	check.call(str((leaper._first_blow["r"] as AnimationNodeAnimation).animation) == "Blow_A_R" and leaper._legs == "blow", "back on the ground the first blow is the usual one")
+	leaper.queue_free()
 	robed.set_hands("none", "bow")
 	robed.bow_draw()
 	for i in 40:
@@ -1504,13 +1596,23 @@ func _selftest() -> void:
 	player.melee()
 	await _wait(0.1)
 	player.melee()
-	await _wait(0.3)
+	await _wait(0.2)
 	check.call(player.combo == 1, "pressing again during the first blow leads into the second")
 	player.melee()
 	await _wait(1.0)
 	var combo_damage: float = Game.melee_power() * (PlayerScript.BLOW_POWER[0] + PlayerScript.BLOW_POWER[1] + PlayerScript.BLOW_POWER[2])
 	check.call(is_equal_approx(dummy.hp, dummy_hp - combo_damage), "a full combo lands all three blows (%.1f of %.1f)" % [dummy_hp - dummy.hp, combo_damage])
 	check.call(player.combo == -1, "the combo ends after the third blow")
+
+	# Jumping: the scout takes the jump pose, strikes downward in the air, and lands.
+	check.call(player.is_on_floor() and not player.in_air(), "the scout stands on the ground")
+	player.jump()
+	await _wait(0.2)
+	check.call(player.in_air() and float(player.body._air) > 0.5, "a jump puts the scout in the jump pose (%.2f)" % float(player.body._air))
+	player.melee()
+	check.call(str(player.body._legs) == "air", "a blow begun in the air is the jump attack")
+	await _wait(1.2)
+	check.call(not player.in_air() and float(player.body._air) < 0.05 and player.combo == -1, "and the scout comes down again")
 
 	# Putting the weapon away, and drawing it to strike.
 	player.toggle_sheathe()
