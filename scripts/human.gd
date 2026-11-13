@@ -45,16 +45,40 @@ const HAIR_COLORS := [Color(0.1, 0.09, 0.09), Color(0.24, 0.16, 0.11), Color(0.4
 const CLOTH_COLORS := [Color(0.86, 0.82, 0.72), Color(0.76, 0.66, 0.5), Color(0.74, 0.55, 0.25), Color(0.62, 0.32, 0.2), Color(0.6, 0.18, 0.16), Color(0.42, 0.45, 0.26), Color(0.2, 0.26, 0.48), Color(0.25, 0.24, 0.24)]
 const SASH_COLORS := [Color(0.2, 0.32, 0.6), Color(0.65, 0.16, 0.14), Color(0.4, 0.27, 0.17), Color(0.22, 0.45, 0.25), Color(0.9, 0.86, 0.74), Color(0.12, 0.12, 0.13)]
 const LEATHER := Color(0.36, 0.25, 0.16)
+## Clothing pieces seen from inside as well as out.
+const TWO_SIDED := ["skirt_short", "skirt_long", "sash", "cloak", "band", "band_wide", "crown", "necklace"]
 ## Hair meshes by "hair" index. "" = no hair mesh.
 const HAIR_FILES := ["hair_buzzed", "hair_parted", "hair_long", "hair_buns", ""]
 
 const ANIMS := ["Idle", "Walk", "Jog_Fwd", "Sprint", "Sword_Attack", "Spell_Simple_Shoot", "Punch_Cross", "Death01",
 	"Sitting_Idle", "Sitting_Talking", "Fixing_Kneeling"]
-## The strike animation is long; it is played faster so the blow lands quickly.
-const STRIKE_SPEED := 2.0
-## The blade is furthest forward 0.46 s into the clip (measured), and the clip is 1.53 s long.
-const STRIKE_HIT := 0.46 / STRIKE_SPEED
-const STRIKE_TIME := 1.53 / STRIKE_SPEED
+## The blows of a combo, in order: A cuts from top to bottom, B sweeps from left to right, C cuts
+## from top right to bottom left. hit: when it lands; chain: the soonest the next blow may follow;
+## length: how long the move takes if nothing follows (seconds at normal speed; a heavy weapon is
+## slower, see attack()). The clips are made from arm poses in _library().
+const BLOWS := [
+	{"shot": "blow_a", "hit": 0.16, "chain": 0.26, "length": 0.5},
+	{"shot": "blow_b", "hit": 0.13, "chain": 0.22, "length": 0.42},
+	{"shot": "blow_c", "hit": 0.2, "chain": 1e9, "length": 0.55},
+]
+## The sling: whirled overhead for as long as the button is held (at least WHIRL_TIME), then the
+## arm comes over and lets go RELEASE seconds later; the throw is over THROW_TIME after letting go.
+const WHIRL_TIME := 0.34
+const RELEASE := 0.08
+const THROW_TIME := 0.3
+const THROW_RELEASE := WHIRL_TIME + RELEASE
+## The bow: drawn fully in DRAW_TIME; after loosing, the arms come down in LOOSE_TIME.
+const DRAW_TIME := 0.5
+const LOOSE_TIME := 0.3
+## Shapes that are carried on the back when put away; the rest hang at the belt.
+## How far _grip may roll a forearm and bend a wrist (radians).
+const ROLL_MAX := 2.3
+const WRIST_MAX := 1.1
+const ON_BACK := ["staff", "spear", "spear_long", "bow", "shield"]
+const NOT_WEAPONS := ["none", "shield", "bow"]
+## Reaching to the back or the belt to draw or put away a weapon; it changes place halfway.
+const STOW_SWAP := 0.14
+const STOW_TIME := 0.36
 const UPPER_BODY := ["spine_01", "spine_02", "spine_03", "neck_01", "Head", "clavicle_l", "clavicle_r",
 	"upperarm_l", "upperarm_r", "lowerarm_l", "lowerarm_r", "hand_l", "hand_r"]
 const FINGERS := ["index", "middle", "ring", "pinky", "thumb"]
@@ -80,7 +104,35 @@ var _speed := 0.0
 var _opts := {}
 var _carry := Transform3D.IDENTITY    # how the weapon sits in the hand while walking about
 var _strike := Transform3D.IDENTITY   # how it sits during a blow
+var _stow := Transform3D.IDENTITY     # how it sits on the back or the belt when put away
 var _strike_left := 0.0               # seconds until the weapon returns to the carry position
+var sheathed := false             # the weapon is on the back or the belt, not in the hand
+var _back: BoneAttachment3D       # a staff or spear is carried here when put away
+var _hip: BoneAttachment3D        # a blade hangs here when put away
+var _sling: Node3D                # the sling, shown only while throwing
+var _sling_pouch: Node3D
+var _throw_t := -1.0              # seconds since the sling was let go, or -1
+var _throw_yaw := 0.0
+var _stowed_for_throw := false
+var _swap_left := -1.0            # seconds until a drawn or stowed weapon changes place
+var _shot := ""                   # the one-shot of the latest blow
+var offhand: Node3D               # what the left hand holds: a weapon, a shield or a bow
+var offhand_kind := "none"
+var hand_l: BoneAttachment3D
+var _arm_l: BoneAttachment3D      # a shield is strapped to the forearm
+var _arm_r: BoneAttachment3D
+var _carry_l := Transform3D.IDENTITY
+var _strike_l := Transform3D.IDENTITY
+var _stow_l := Transform3D.IDENTITY
+var _strike_side := "r"           # which hand the latest blow was made with
+var _whirling := false            # the sling is going round overhead
+var _whirl_t := 0.0
+var _auto_release := -1.0         # whirl(): let go by itself after this long
+var drawing := false              # the bow is drawn or being drawn
+var draw_amount := 0.0            # how far it is drawn, 0..1
+var _loose_t := -1.0              # seconds since an arrow was loosed, or -1
+var _arrow: Node3D                # the arrow on the string while the bow is drawn
+var _string: Array = []           # the two halves of the bow string
 
 
 static func value_name(key: String, l: Dictionary) -> String:
@@ -132,9 +184,21 @@ func build(l: Dictionary, opts: Dictionary = {}) -> void:
 		c.queue_free()
 	weapon = null
 	weapon_kind = "none"
+	offhand = null
+	offhand_kind = "none"
 	garments = []
 	dead = false
 	posed = false
+	_throw_t = -1.0
+	_swap_left = -1.0
+	_stowed_for_throw = false
+	_whirling = false
+	_auto_release = -1.0
+	drawing = false
+	draw_amount = 0.0
+	_loose_t = -1.0
+	_arrow = null
+	_string = []
 	look = l.duplicate()
 	_opts = opts
 	var sex := _i("sex")
@@ -161,6 +225,21 @@ func build(l: Dictionary, opts: Dictionary = {}) -> void:
 	hand_r = BoneAttachment3D.new()
 	hand_r.bone_name = "hand_r"
 	skeleton.add_child(hand_r)
+	hand_l = BoneAttachment3D.new()
+	hand_l.bone_name = "hand_l"
+	skeleton.add_child(hand_l)
+	_arm_l = BoneAttachment3D.new()
+	_arm_l.bone_name = "lowerarm_l"
+	skeleton.add_child(_arm_l)
+	_arm_r = BoneAttachment3D.new()
+	_arm_r.bone_name = "lowerarm_r"
+	skeleton.add_child(_arm_r)
+	_back = BoneAttachment3D.new()
+	_back.bone_name = "spine_03"
+	skeleton.add_child(_back)
+	_hip = BoneAttachment3D.new()
+	_hip.bone_name = "pelvis"
+	skeleton.add_child(_hip)
 
 	# Brows: the body's own set is "heavy" on the man and "fine" on the woman. For the other
 	# choice, hide it and hang the other set on the head.
@@ -173,6 +252,9 @@ func build(l: Dictionary, opts: Dictionary = {}) -> void:
 
 	var covering := _i("head")
 	var covered := covering == 1 or covering == 3
+	var head_wear: Array = opts.get("head_wear", [])
+	if not head_wear.is_empty():
+		covered = head_wear.any(func(p) -> bool: return p[0] == "cap" or p[0] == "helmet")
 	var hair_file: String = HAIR_FILES[_i("hair")]
 	if hair_file == "hair_buzzed" and sex == 1:
 		hair_file = "hair_buzzed_f"
@@ -183,6 +265,7 @@ func build(l: Dictionary, opts: Dictionary = {}) -> void:
 
 	_dress(sex, d, body_mi, opts)
 	_setup_animation(sex)
+	_make_sling()
 
 
 ## Measures one body once: bones, vertex ownership, and the places clothes are fitted to.
@@ -402,19 +485,29 @@ func _dress(sex: int, d: Dictionary, body_mi: MeshInstance3D, opts: Dictionary) 
 	var long_robe := outfit == 1 or outfit == 2
 	var leathers := outfit == 3
 
-	_wear(sex, d, body_mi, "top_long" if long_robe else "top_short", cloth)
-	_wear(sex, d, body_mi, "skirt_long" if long_robe else "skirt_short", cloth, true)
-	_wear(sex, d, body_mi, "sash", LEATHER if leathers else sash_c, true)
 	_wear(sex, d, body_mi, "shoes", Color(0.3, 0.2, 0.13))
-	if leathers:
-		_wear(sex, d, body_mi, "vest", LEATHER)
-		_wear(sex, d, body_mi, "bracers", LEATHER)
-		_wear(sex, d, body_mi, "leg_wraps", LEATHER)
-	if outfit == 2:
-		var cloak_c := sash_c.darkened(0.35)
-		_wear(sex, d, body_mi, "mantle", cloak_c)
-		_wear(sex, d, body_mi, "cloak", cloak_c, true)
+	if opts.has("wear"):
+		# The player: what is equipped decides the clothes (Items "wear"), dyed in the chosen colors.
+		for p in opts["wear"]:
+			_wear(sex, d, body_mi, str(p[0]), _wear_color(p[1], cloth, sash_c), TWO_SIDED.has(str(p[0])))
+	else:
+		_wear(sex, d, body_mi, "top_long" if long_robe else "top_short", cloth)
+		_wear(sex, d, body_mi, "skirt_long" if long_robe else "skirt_short", cloth, true)
+		_wear(sex, d, body_mi, "sash", LEATHER if leathers else sash_c, true)
+		if leathers:
+			_wear(sex, d, body_mi, "vest", LEATHER)
+			_wear(sex, d, body_mi, "bracers", LEATHER)
+			_wear(sex, d, body_mi, "leg_wraps", LEATHER)
+		if outfit == 2:
+			var cloak_c := sash_c.darkened(0.35)
+			_wear(sex, d, body_mi, "mantle", cloak_c)
+			_wear(sex, d, body_mi, "cloak", cloak_c, true)
 
+	var head_wear: Array = opts.get("head_wear", [])
+	if not head_wear.is_empty():
+		for p in head_wear:
+			_wear(sex, d, body_mi, str(p[0]), _wear_color(p[1], cloth, sash_c), TWO_SIDED.has(str(p[0])))
+		return
 	var covering := _i("head")
 	var head_c: Color = opts.get("head_color", Color(0.9, 0.86, 0.76) if covering == 1 else cloth.lightened(0.25))
 	match covering:
@@ -428,6 +521,13 @@ func _dress(sex: int, d: Dictionary, body_mi: MeshInstance3D, opts: Dictionary) 
 			_wear(sex, d, body_mi, "shawl", head_c)
 	if bool(opts.get("crown", false)):
 		_wear(sex, d, body_mi, "crown", Color(0.9, 0.72, 0.2), true)
+
+
+## A color from an item's "wear" list: a Color, or "cloth" / "sash" for the chosen colors.
+static func _wear_color(c: Variant, cloth: Color, sash: Color) -> Color:
+	if c is Color:
+		return c
+	return sash if str(c) == "sash" else cloth
 
 
 ## Adds one clothing piece as a mesh skinned to the body's skeleton.
@@ -533,6 +633,20 @@ static func _make_piece(d: Dictionary, piece: String) -> ArrayMesh:
 					return p.z < mid_z - 0.01
 				return false
 			return _shell(d, 0.014, choose)
+		"helmet":
+			# Like the cap but thicker, coming down over the brow and the ears.
+			var head_b: int = bind["Head"]
+			var mid_z: float = ((d["head_lo"] as Vector3).z + (d["head_hi"] as Vector3).z) * 0.5
+			var brow: float = float(d["brow_top"]) + 0.01
+			var ear: float = float(d["eye_y"]) - 0.07
+			choose = func(p: Vector3, o: int) -> bool:
+				if o == head_b:
+					return p.y > brow or (p.z < mid_z + 0.01 and p.y > ear)
+				return false
+			return _shell(d, 0.032, choose)
+		"necklace":
+			var neck_y: float = (rest["neck_01"] as Vector3).y
+			return _ring(d, neck_y + 0.015, 0.018, 0.012, ["neck_01"], ["neck_01"])
 		"band":
 			return _ring(d, float(d["brow_top"]) + 0.05, 0.022, 0.02, ["Head"], ["Head"])
 		"band_wide":
@@ -802,63 +916,161 @@ static func _cloak(d: Dictionary) -> ArrayMesh:
 
 # ================================================================ weapons
 
-## kind: none, staff, spear, dagger, sickle, sword. Held in the right fist, pointing where the
-## thumb points.
-func set_weapon(kind: String) -> void:
-	if weapon != null:
-		hand_r.remove_child(weapon)
-		weapon.queue_free()
-		weapon = null
-	weapon_kind = kind
-	if kind == "none":
-		return
-	weapon = Node3D.new()
-	hand_r.add_child(weapon)
+## kind: none, staff, spear, spear_long, dagger, sickle, sword, sword_short, sword_long, club,
+## mace, axe. Held in the right fist, pointing where the thumb points. Leaves the left hand as it is.
+func set_weapon(kind: String, color: Color = Color(0, 0, 0, 0)) -> void:
+	set_hands(kind, offhand_kind, color)
 
-	# Work out the grip from the rest pose: where the palm is and which way the thumb points.
-	var hand := skeleton.get_bone_global_rest(skeleton.find_bone("hand_r"))
-	var knuckle := skeleton.get_bone_global_rest(skeleton.find_bone("middle_01_r")).origin
-	var thumb := skeleton.get_bone_global_rest(skeleton.find_bone("thumb_01_r")).origin
-	var fingers := (knuckle - hand.origin).normalized()
-	var up := thumb - hand.origin
-	up = (up - fingers * up.dot(fingers)).normalized()
-	var side := fingers.cross(up).normalized()
-	var grip := hand.origin + fingers * 0.085 - side * 0.028
-	var held := Basis(side, up, side.cross(up))   # weapon +Y runs along the thumb
-	_strike = hand.affine_inverse() * Transform3D(held.orthonormalized(), grip)
-	# Held along the thumb, a weapon at rest would cross the body. So while it is only being
-	# carried it points a set way relative to the standing figure: a staff upright beside the
-	# hip with its foot on the ground, a blade forward and a little up.
-	var long_weapon := kind == "staff" or kind == "spear"
+
+## What each hand holds. The right takes weapons; the left takes a weapon, a shield or a bow.
+## `rc` and `lc` tint the metal (or the wood of a bow, the face of a shield); alpha 0 = usual.
+func set_hands(right: String, left: String, rc: Color = Color(0, 0, 0, 0), lc: Color = Color(0, 0, 0, 0)) -> void:
+	for n in [weapon, offhand]:
+		if n != null:
+			n.get_parent().remove_child(n)
+			n.queue_free()
+	weapon = null
+	offhand = null
+	_arrow = null
+	_string = []
+	weapon_kind = right
+	offhand_kind = left
+	_strike_left = 0.0
 	var idle: Animation = _player.get_animation("Idle")
-	var hand_idle := pose_basis(idle, skeleton, skeleton.find_bone("hand_r"), 0.0)
+	var fist_anim: Animation = _player.get_animation("Sword_Attack")
+	_strike = fist_frame(skeleton, fist_anim, 0.46, "r")
+	_strike_l = fist_frame(skeleton, idle, 0.0, "l")
+	if right != "none":
+		weapon = _item_model(right, rc)
+		_hand_holder("r", right).add_child(weapon)
+		# During a blow the weapon runs through the hollow of the fist, coming out on the thumb
+		# side. Held along the thumb, a weapon at rest would cross the body, so while it is only
+		# carried it points a set way relative to the standing figure: a staff upright beside the
+		# hip with its foot on the ground, a blade forward and a little up.
+		_carry = _shield_frame("r") if right == "shield" else _carry_frame(idle, "r", right)
+		_stow = _stow_transform(right, "r")
+	if left != "none":
+		offhand = _item_model(left, lc)
+		_hand_holder("l", left).add_child(offhand)
+		_carry_l = _shield_frame("l") if left == "shield" else _carry_frame(idle, "l", left)
+		_stow_l = _stow_transform(left, "l")
+		if left == "bow":
+			_make_arrow()
+	_strike_side = "r"
+	sheathe(sheathed)
+
+
+## How an item is carried at rest in one hand: through the hollow of the relaxed fist, pointing a
+## set way in model space (the model faces +Z; its right is -X).
+func _carry_frame(idle: Animation, side: String, kind: String) -> Transform3D:
+	var hand_idle := pose_basis(idle, skeleton, skeleton.find_bone("hand_" + side), 0.0)
 	var to_hand := hand_idle.inverse()            # model-space direction -> hand-space direction
-	var aim := Vector3(0.0, 1.0, 0.1) if long_weapon else Vector3(-0.2, 0.35, 0.9)   # model faces +Z, right hand is at -X
+	var out := 1.0 if side == "r" else -1.0       # which way is away from the body
+	var aim := Vector3(0.0, 1.0, 0.1)
+	if kind == "bow":
+		aim = Vector3(-0.15 * out, 1.0, 0.25)
+	elif not _long(kind):
+		aim = Vector3(-0.2 * out, 0.35, 0.9)
 	var along := (to_hand * aim).normalized()
 	var across := along.cross(to_hand * Vector3(1.0, 0.0, 0.0)).normalized()
 	var carried := Basis(across, along, across.cross(along))
-	_carry = Transform3D(carried.orthonormalized(), _strike.origin)
-	if long_weapon:
-		_carry.origin += along * -0.3 + (to_hand * Vector3(-0.05, 0.0, 0.0))
-	_strike_left = 0.0
-	weapon.transform = _carry
+	var t := Transform3D(carried.orthonormalized(), fist_frame(skeleton, idle, 0.0, side).origin)
+	if _long(kind):
+		t.origin += along * -0.3
+	return t
 
+
+## What an item hangs from while it is in use: a shield from the forearm, the rest from the hand.
+func _hand_holder(side: String, kind: String) -> Node3D:
+	if kind == "shield":
+		return _arm_r if side == "r" else _arm_l
+	return hand_r if side == "r" else hand_l
+
+
+## A shield strapped to the outside of the forearm, its face turned away from the body.
+func _shield_frame(side: String) -> Transform3D:
+	var lower := skeleton.find_bone("lowerarm_" + side)
+	var hand := skeleton.find_bone("hand_" + side)
+	var length := skeleton.get_bone_rest(hand).origin.length()
+	var arm := pose_basis(_player.get_animation("Idle"), skeleton, lower, 0.0)
+	var along := skeleton.get_bone_rest(hand).origin.normalized()
+	var out := (arm.inverse() * Vector3(1.0 if side == "l" else -1.0, 0.0, 0.35)).normalized()
+	out = (out - along * out.dot(along)).normalized()
+	var basis := Basis(along.cross(out).normalized(), along, out)
+	return Transform3D(basis, along * length * 0.55 + out * 0.07)
+
+
+## The mesh of a weapon, shield or bow. The grip is at the origin and the item runs along +Y.
+func _item_model(kind: String, tint: Color) -> Node3D:
+	var n := Node3D.new()
 	var wood := Color(0.42, 0.28, 0.16)
 	var bronze := Color(0.8, 0.6, 0.3)
 	var iron := Color(0.66, 0.68, 0.72)
+	var metal := tint if tint.a > 0.0 else (iron if kind in ["sword", "sword_long", "spear_long"] else bronze)
 	match kind:
 		"staff":
-			_part(_cyl(0.02, 0.026, 1.7, wood), Vector3(0, 0.25, 0))
-		"spear":
-			_part(_cyl(0.017, 0.019, 1.9, wood), Vector3(0, 0.35, 0))
-			_part(_cyl(0.0, 0.035, 0.24, bronze), Vector3(0, 1.42, 0))
+			_part(n, _cyl(0.02, 0.026, 1.7, wood), Vector3(0, 0.25, 0))
+		"spear", "spear_long":
+			var long := kind == "spear_long"
+			_part(n, _cyl(0.017, 0.02, 2.4 if long else 1.9, wood), Vector3(0, 0.55 if long else 0.35, 0))
+			_part(n, _cyl(0.0, 0.035, 0.3 if long else 0.24, metal), Vector3(0, 1.9 if long else 1.42, 0))
 		"dagger":
-			_blade(0.3, bronze)
+			_blade(n, 0.3, metal)
 		"sickle":
-			_blade(0.44, bronze)
-			_part(_box(Vector3(0.012, 0.16, 0.045), bronze), Vector3(0, 0.56, 0.045), Vector3(0.75, 0, 0))
+			_blade(n, 0.44, metal)
+			_part(n, _box(Vector3(0.012, 0.16, 0.045), metal), Vector3(0, 0.56, 0.045), Vector3(0.75, 0, 0))
+		"sword_short":
+			_blade(n, 0.5, metal)
+		"sword_long":
+			_blade(n, 0.86, metal)
+		"club":
+			_part(n, _cyl(0.045, 0.018, 0.7, tint if tint.a > 0.0 else wood), Vector3(0, 0.25, 0))
+		"mace":
+			_part(n, _cyl(0.016, 0.018, 0.62, wood), Vector3(0, 0.2, 0))
+			var head := MeshInstance3D.new()
+			var ball := SphereMesh.new()
+			ball.radius = 0.07
+			ball.height = 0.12
+			ball.radial_segments = 8
+			ball.rings = 4
+			head.mesh = ball
+			head.material_override = _cloth_material(metal)
+			_part(n, head, Vector3(0, 0.52, 0))
+		"axe":
+			_part(n, _cyl(0.017, 0.019, 0.72, wood), Vector3(0, 0.22, 0))
+			_part(n, _box(Vector3(0.016, 0.2, 0.17), metal), Vector3(0, 0.5, 0.1))
+		"shield":
+			var face := _cyl(0.34, 0.34, 0.035, tint if tint.a > 0.0 else Color(0.6, 0.45, 0.3))
+			_part(n, face, Vector3.ZERO, Vector3(PI * 0.5, 0, 0))
+			var rim := _cyl(0.36, 0.36, 0.025, bronze.darkened(0.2))
+			_part(n, rim, Vector3(0, 0, -0.004), Vector3(PI * 0.5, 0, 0))
+			var boss := _cyl(0.02, 0.08, 0.05, bronze)
+			_part(n, boss, Vector3(0, 0, 0.035), Vector3(PI * 0.5, 0, 0))
+		"bow":
+			var c := tint if tint.a > 0.0 else wood
+			_part(n, _cyl(0.022, 0.022, 0.14, LEATHER), Vector3.ZERO)
+			for s in [-1.0, 1.0]:
+				# Each limb in two pieces, bowing away from the archer and then curving back toward
+				# them (+Z here) at the tip.
+				var mid := Vector3(0, s * 0.38, -0.03)
+				var end := Vector3(0, s * 0.66, 0.06)
+				var inner := _cyl(0.013, 0.019, 1.0, c)
+				_segment(inner, Vector3(0, s * 0.06, 0), mid)
+				n.add_child(inner)
+				var outer := _cyl(0.008, 0.013, 1.0, c)
+				_segment(outer, mid, end)
+				n.add_child(outer)
+				var tip := Node3D.new()
+				tip.name = "Tip%d" % (0 if s < 0.0 else 1)
+				tip.position = end
+				n.add_child(tip)
+			for k in 2:
+				var str_mi := _cyl(0.003, 0.003, 1.0, Color(0.85, 0.82, 0.74))
+				n.add_child(str_mi)
+				_string.append(str_mi)
 		_:
-			_blade(0.68, iron)
+			_blade(n, 0.68, metal)
+	return n
 
 
 func _cyl(top: float, bottom: float, height: float, color: Color) -> MeshInstance3D:
@@ -882,16 +1094,197 @@ func _box(size: Vector3, color: Color) -> MeshInstance3D:
 	return mi
 
 
-func _part(mi: MeshInstance3D, pos: Vector3, rot: Vector3 = Vector3.ZERO) -> void:
+func _part(to: Node3D, mi: MeshInstance3D, pos: Vector3, rot: Vector3 = Vector3.ZERO) -> void:
 	mi.position = pos
 	mi.rotation = rot
-	weapon.add_child(mi)
+	to.add_child(mi)
 
 
-func _blade(length: float, color: Color) -> void:
-	_part(_cyl(0.017, 0.017, 0.13, Color(0.3, 0.2, 0.13)), Vector3.ZERO)
-	_part(_box(Vector3(0.03, 0.022, 0.11), color), Vector3(0, 0.07, 0))
-	_part(_box(Vector3(0.012, length, 0.05), color), Vector3(0, 0.08 + length * 0.5, 0))
+func _blade(to: Node3D, length: float, color: Color) -> void:
+	_part(to, _cyl(0.017, 0.017, 0.13, Color(0.3, 0.2, 0.13)), Vector3.ZERO)
+	_part(to, _box(Vector3(0.03, 0.022, 0.11), color), Vector3(0, 0.07, 0))
+	_part(to, _box(Vector3(0.012, length, 0.05), color), Vector3(0, 0.08 + length * 0.5, 0))
+
+
+## An arrow, nocked on the string while the bow is drawn.
+func _make_arrow() -> void:
+	_arrow = Node3D.new()
+	_part(_arrow, _cyl(0.006, 0.006, 0.72, Color(0.62, 0.5, 0.32)), Vector3(0, 0.36, 0))
+	_part(_arrow, _cyl(0.0, 0.014, 0.06, Color(0.5, 0.5, 0.52)), Vector3(0, 0.75, 0))
+	_part(_arrow, _box(Vector3(0.002, 0.08, 0.03), Color(0.85, 0.82, 0.74)), Vector3(0, 0.05, 0))
+	hand_r.add_child(_arrow)
+	_arrow.visible = false
+
+
+## Long things go on the back when put away; the rest hang at the belt.
+static func _long(kind: String) -> bool:
+	return kind in ["staff", "spear", "spear_long"]
+
+
+static func is_weapon(kind: String) -> bool:
+	return not NOT_WEAPONS.has(kind)
+
+
+## Where `bone` is at `time` of `anim`, in the space of one hand ("l" or "r").
+static func _in_hand(sk: Skeleton3D, anim: Animation, side: String, bone: String, time: float) -> Vector3:
+	var hand := sk.find_bone("hand_" + side)
+	var chain: Array = []
+	var b := sk.find_bone(bone)
+	while b >= 0 and b != hand:
+		chain.push_front(b)
+		b = sk.get_bone_parent(b)
+	var t := Transform3D.IDENTITY
+	for i in chain:
+		var local := sk.get_bone_rest(i)
+		local.basis = _anim_basis(anim, sk, i, time)
+		t = t * local
+	return t.origin
+
+
+## How something gripped sits in a fist as `anim` has it at `time`, in hand space: at the hollow
+## the curled fingers make, running across the knuckles and out on the thumb side (+Y), the flat
+## facing the way the fingers point (-Z).
+static func fist_frame(sk: Skeleton3D, anim: Animation, time: float, side: String) -> Transform3D:
+	var hollow := Vector3.ZERO
+	for f in ["index", "middle", "ring"]:
+		for j in 3:
+			hollow += _in_hand(sk, anim, side, "%s_0%d_%s" % [f, j + 1, side], time)
+	hollow /= 9.0
+	var up := (_in_hand(sk, anim, side, "index_01_" + side, time) - _in_hand(sk, anim, side, "pinky_01_" + side, time)).normalized()
+	var fingers := _in_hand(sk, anim, side, "middle_01_" + side, time)
+	fingers = (fingers - up * fingers.dot(up)).normalized()
+	var z := -fingers
+	return Transform3D(Basis(up.cross(z).normalized(), up, z), hollow)
+
+
+func _fist(anim: Animation, time: float) -> Transform3D:
+	return fist_frame(skeleton, anim, time, "r")
+
+
+## Where a put-away item sits, in the space of the bone it hangs from. From the right hand: a
+## staff or spear slantwise across the back, top over the right shoulder; a blade at the left hip,
+## hilt at the sash, pointing down and back. From the left hand the same on the other side, and a
+## shield flat on the back.
+func _stow_transform(kind: String, side: String) -> Transform3D:
+	var d := _body(_i("sex"))
+	var rest: Dictionary = d["rest"]
+	var dir: Vector3
+	var at: Vector3
+	var bone := "spine_03"
+	var mirror := 1.0 if side == "r" else -1.0
+	var s3: Vector3 = rest["spine_03"]
+	var back_sec := _section(d, s3.y, ["spine_02", "spine_03", "clavicle_l", "clavicle_r"])
+	var back_z := float(back_sec.get("back", s3.z - 0.14))
+	var z := Vector3(0, 0, 1)
+	if kind == "shield":
+		dir = Vector3(0, 1, 0)
+		z = Vector3(0, 0, -1)
+		at = Vector3(s3.x, s3.y - 0.05, back_z - 0.08)
+	elif ON_BACK.has(kind):
+		dir = Vector3(-0.55 * mirror, 1.0, 0.0).normalized()       # model faces +Z; its right is -X
+		var middle := 0.0 if kind == "bow" else (0.25 if kind == "staff" else 0.4)   # the middle of the shaft, from the grip
+		var off := 0.06
+		if (side == "r" and offhand_kind == "shield") or side == "l" and _long(weapon_kind):
+			off += 0.07    # over the shield, or behind the other shaft
+		at = Vector3(s3.x, s3.y, back_z - off) - dir * middle
+	else:
+		bone = "pelvis"
+		var waist: Vector3 = rest["spine_01"]
+		var sec := _section(d, waist.y, ["pelvis", "spine_01"])
+		dir = Vector3(0.14 * mirror, -0.78, -0.6).normalized()
+		at = Vector3((float(sec.get("half", 0.16)) + 0.06) * mirror, waist.y + 0.02, 0.05)
+		z = Vector3(mirror, 0, 0)
+	z = (z - dir * z.dot(dir)).normalized()
+	var model := Transform3D(Basis(dir.cross(z).normalized(), dir, z), at)
+	return skeleton.get_bone_global_rest(skeleton.find_bone(bone)).affine_inverse() * model
+
+
+func _holder(kind: String) -> Node3D:
+	return _back if ON_BACK.has(kind) else _hip
+
+
+## Moves what both hands hold at once to the back or belt (true), or into the hands (false).
+func sheathe(on: bool) -> void:
+	sheathed = on
+	_swap_left = -1.0
+	_strike_left = 0.0
+	for side in ["r", "l"]:
+		var n: Node3D = weapon if side == "r" else offhand
+		if n == null:
+			continue
+		var kind := weapon_kind if side == "r" else offhand_kind
+		var holder: Node3D = _holder(kind)
+		if not on:
+			holder = _hand_holder(side, kind)
+		if n.get_parent() != holder:
+			n.get_parent().remove_child(n)
+			holder.add_child(n)
+		if side == "r":
+			n.transform = _stow if on else _carry
+		else:
+			n.transform = _stow_l if on else _carry_l
+
+
+## Reaches to the back or the belt to put away what the hands hold (true) or take it up (false).
+## It changes place STOW_SWAP seconds in. Returns false if there is nothing to do.
+func stow(on: bool) -> bool:
+	if (weapon == null and offhand == null) or dead or _tree == null or on == sheathed or _swap_left >= 0.0:
+		return false
+	var kind := weapon_kind if weapon != null else offhand_kind
+	_play("reach_back" if ON_BACK.has(kind) else "reach_hip")
+	_swap_left = STOW_SWAP
+	return true
+
+
+## True while drawing or putting away, slinging or shooting: the hands are busy.
+func busy() -> bool:
+	return _swap_left >= 0.0 or _throw_t >= 0.0 or _whirling or drawing or _loose_t >= 0.0
+
+
+## Where the right hand is, in the world.
+func hand_point() -> Vector3:
+	return hand_r.global_position
+
+
+## Where the left hand is, in the world (the bow's grip).
+func left_hand_point() -> Vector3:
+	return hand_l.global_position
+
+
+## The sling: two cords from the fist to a leather pouch holding a stone. It hangs from the
+## hand but is turned in world space while it is whirled.
+func _make_sling() -> void:
+	_sling = Node3D.new()
+	hand_r.add_child(_sling)
+	_sling.position = _fist(_player.get_animation("Sling_Whirl"), 0.0).origin
+	var cord := Color(0.5, 0.42, 0.3)
+	for side in [-1.0, 1.0]:
+		var c := _cyl(0.005, 0.005, 0.6, cord)
+		c.rotation.x = PI * 0.5
+		c.position = Vector3(side * 0.012, 0.0, 0.3)
+		_sling.add_child(c)
+	_sling_pouch = Node3D.new()
+	_sling_pouch.position = Vector3(0, 0, 0.62)
+	_sling.add_child(_sling_pouch)
+	var pouch := _box(Vector3(0.07, 0.025, 0.09), LEATHER)
+	_sling_pouch.add_child(pouch)
+	var stone := MeshInstance3D.new()
+	var ball := SphereMesh.new()
+	ball.radius = 0.035
+	ball.height = 0.07
+	ball.radial_segments = 6
+	ball.rings = 3
+	stone.mesh = ball
+	stone.material_override = _cloth_material(Color(0.55, 0.52, 0.48))
+	stone.name = "Stone"
+	stone.position.y = 0.025
+	_sling_pouch.add_child(stone)
+	_sling.visible = false
+
+
+func _sling_turn(yaw: float, droop: float) -> void:
+	var s := global_transform.basis.get_scale().x
+	_sling.global_basis = (Basis(Vector3.UP, yaw) * Basis(Vector3.RIGHT, droop)).scaled(Vector3.ONE * s)
 
 
 # ================================================================ animation
@@ -909,6 +1302,48 @@ static func _library(sex: int, target: Skeleton3D) -> AnimationLibrary:
 		# The kneeling clip kneels down, works, and stands up again. People at work stay down:
 		# they use only its middle, where the hips are low and the hands are busy.
 		lib.add_animation("Kneeling_Work", _cut(lib.get_animation("Fixing_Kneeling"), 1.0, 4.0))
+		# Poses no clip has are made by aiming the arm bones (directions in model space: the model
+		# faces +Z, its right is -X), turning the forearm and wrist so the blade held in the fist
+		# points along the cut ("blade_r"), and turning ("twist", + to the left) or bending
+		# ("lean", + forward) the chest.
+		var strike := lib.get_animation("Sword_Attack")
+		var idle := lib.get_animation("Idle")
+		for side in ["r", "l"]:
+			var keys: Dictionary = _blow_keys(side)
+			for blow in ["a", "b", "c"]:
+				lib.add_animation("Blow_%s_%s" % [blow.to_upper(), side.to_upper()], _aimed(target, idle, strike, keys[blow]))
+		# The sling: the right hand held high over the head while the sling goes round (looped for
+		# as long as it is held), the left arm pointing at the mark; then the arm comes over and
+		# forward, and follows through.
+		var whirl := {"upperarm_r": Vector3(-0.5, 0.85, 0.05), "lowerarm_r": Vector3(0.35, 0.85, 0.25),
+			"upperarm_l": Vector3(0.3, -0.1, 0.95), "lowerarm_l": Vector3(0.1, 0.05, 1.0)}
+		var whirl2 := whirl.duplicate()
+		whirl2["lowerarm_r"] = Vector3(0.3, 0.9, -0.15)
+		var release := {"upperarm_r": Vector3(-0.2, 0.55, 0.8), "lowerarm_r": Vector3(-0.05, 0.35, 0.95),
+			"upperarm_l": Vector3(0.35, -0.6, 0.4), "lowerarm_l": Vector3(0.2, -0.5, 0.6)}
+		var follow := {"upperarm_r": Vector3(0.1, -0.35, 0.93), "lowerarm_r": Vector3(0.35, -0.5, 0.75),
+			"upperarm_l": Vector3(0.3, -0.9, 0.15), "lowerarm_l": Vector3(0.15, -0.85, 0.35)}
+		var spin := _aimed(target, idle, strike, [[0.0, whirl], [0.11, whirl2], [0.22, whirl]])
+		spin.loop_mode = Animation.LOOP_LINEAR
+		lib.add_animation("Sling_Whirl", spin)
+		lib.add_animation("Sling_Release", _aimed(target, idle, strike, [
+			[0.0, whirl2], [RELEASE, release], [RELEASE + 0.12, follow], [THROW_TIME, follow]]))
+		# The bow: held out at arm's length in the left fist, upright, while the right hand draws
+		# the string back to the jaw; the chest turns side-on to the mark.
+		var nock := {"twist": -0.35, "upperarm_l": Vector3(0.25, 0.08, 0.97), "lowerarm_l": Vector3(0.1, 0.06, 1.0),
+			"blade_l": Vector3(0.0, 1.0, 0.05), "upperarm_r": Vector3(-0.2, 0.1, 0.97), "lowerarm_r": Vector3(0.35, 0.08, 0.93)}
+		var full := {"twist": -0.55, "upperarm_l": Vector3(0.12, 0.1, 1.0), "lowerarm_l": Vector3(0.02, 0.08, 1.0),
+			"blade_l": Vector3(0.0, 1.0, 0.05), "upperarm_r": Vector3(-0.75, 0.2, -0.5), "lowerarm_r": Vector3(0.82, 0.12, 0.55)}
+		lib.add_animation("Bow_Draw", _aimed(target, idle, strike, [[0.0, nock], [DRAW_TIME, full]]))
+		var after := full.duplicate()
+		after["lowerarm_r"] = Vector3(-0.3, 0.0, -0.95)
+		after["upperarm_r"] = Vector3(-0.85, 0.0, -0.5)
+		lib.add_animation("Bow_Loose", _aimed(target, idle, strike, [[0.0, full], [0.06, after], [LOOSE_TIME, after]]))
+		# Reaching over the right shoulder to the back, and across to the left hip.
+		var back := {"upperarm_r": Vector3(-0.25, 0.9, -0.15), "lowerarm_r": Vector3(0.25, 0.1, -0.95)}
+		var hip := {"upperarm_r": Vector3(0.15, -0.85, 0.45), "lowerarm_r": Vector3(0.9, -0.2, 0.35)}
+		lib.add_animation("Reach_Back", _aimed(target, idle, strike, [[0.0, back], [STOW_TIME - 0.12, back]]))
+		lib.add_animation("Reach_Hip", _aimed(target, idle, strike, [[0.0, hip], [STOW_TIME - 0.12, hip]]))
 		_libraries[sex] = lib
 		src.free()
 	return _libraries[sex]
@@ -949,10 +1384,199 @@ static func _cut(a: Animation, from: float, to: float) -> Animation:
 	return out
 
 
+## The arm poses of the three blows of a combo, made with the right hand ("r") or the left ("l").
+## Right hand: A chops from overhead down the middle; B is a backhand from the left across to the
+## right; C cuts from high on the right down to low on the left. Left hand: the same moves seen in
+## a mirror, except that B is the left hand's forehand, which also sweeps from left to right.
+static func _blow_keys(side: String) -> Dictionary:
+	var a := [
+		[0.0, {"lean": -0.08, "upperarm_r": Vector3(-0.3, 0.9, 0.15), "lowerarm_r": Vector3(0.2, 0.7, -0.7), "blade_r": Vector3(0.05, 0.45, -0.9)}],
+		[0.08, {"upperarm_r": Vector3(-0.15, 0.8, 0.55), "lowerarm_r": Vector3(0.12, 0.75, 0.65), "blade_r": Vector3(0.08, 0.99, 0.1)}],
+		[0.14, {"lean": 0.1, "upperarm_r": Vector3(-0.08, 0.35, 0.93), "lowerarm_r": Vector3(0.15, 0.05, 0.99), "blade_r": Vector3(0.08, 0.25, 0.96)}],
+		[0.2, {"lean": 0.18, "upperarm_r": Vector3(-0.03, -0.2, 0.98), "lowerarm_r": Vector3(0.2, -0.6, 0.78), "blade_r": Vector3(0.1, -0.45, 0.89)}],
+		[0.3, {"lean": 0.22, "upperarm_r": Vector3(0.0, -0.7, 0.7), "lowerarm_r": Vector3(0.2, -0.9, 0.4), "blade_r": Vector3(0.12, -0.85, 0.5)}],
+	]
+	var backhand := [
+		[0.0, {"twist": 0.5, "upperarm_r": Vector3(0.55, 0.0, 0.83), "lowerarm_r": Vector3(0.95, 0.1, -0.1), "blade_r": Vector3(0.5, 0.1, -0.85)}],
+		[0.06, {"twist": 0.3, "upperarm_r": Vector3(0.25, 0.0, 0.97), "lowerarm_r": Vector3(0.7, 0.05, 0.7), "blade_r": Vector3(0.98, 0.08, 0.15)}],
+		[0.13, {"upperarm_r": Vector3(-0.3, 0.02, 0.95), "lowerarm_r": Vector3(-0.15, 0.02, 0.99), "blade_r": Vector3(-0.25, 0.05, 0.97)}],
+		[0.185, {"twist": -0.25, "upperarm_r": Vector3(-0.7, 0.0, 0.7), "lowerarm_r": Vector3(-0.7, 0.0, 0.7), "blade_r": Vector3(-0.97, 0.05, 0.2)}],
+		[0.24, {"twist": -0.45, "upperarm_r": Vector3(-0.9, 0.0, 0.4), "lowerarm_r": Vector3(-0.85, 0.0, 0.1), "blade_r": Vector3(-0.7, 0.05, -0.7)}],
+	]
+	var forehand := [
+		[0.0, {"twist": -0.5, "upperarm_r": Vector3(-0.85, 0.1, -0.3), "lowerarm_r": Vector3(-0.6, 0.15, -0.75), "blade_r": Vector3(-0.3, 0.15, -0.95)}],
+		[0.06, {"twist": -0.3, "upperarm_r": Vector3(-0.75, 0.05, 0.4), "lowerarm_r": Vector3(-0.55, 0.05, 0.6), "blade_r": Vector3(-0.98, 0.08, 0.1)}],
+		[0.13, {"upperarm_r": Vector3(-0.3, 0.0, 0.95), "lowerarm_r": Vector3(0.15, 0.0, 0.99), "blade_r": Vector3(0.4, 0.02, 0.92)}],
+		[0.185, {"twist": 0.25, "upperarm_r": Vector3(0.05, -0.02, 1.0), "lowerarm_r": Vector3(0.65, -0.02, 0.75), "blade_r": Vector3(0.97, 0.0, 0.2)}],
+		[0.24, {"twist": 0.45, "upperarm_r": Vector3(0.35, -0.05, 0.93), "lowerarm_r": Vector3(0.9, -0.05, 0.4), "blade_r": Vector3(0.85, 0.0, -0.5)}],
+	]
+	var c := [
+		[0.0, {"twist": -0.45, "lean": -0.05, "upperarm_r": Vector3(-0.7, 0.65, -0.2), "lowerarm_r": Vector3(-0.2, 0.85, -0.45), "blade_r": Vector3(-0.35, 0.55, -0.75)}],
+		[0.11, {"twist": -0.15, "upperarm_r": Vector3(-0.45, 0.5, 0.72), "lowerarm_r": Vector3(-0.05, 0.45, 0.9), "blade_r": Vector3(0.15, 0.8, 0.55)}],
+		[0.2, {"twist": 0.2, "lean": 0.1, "upperarm_r": Vector3(-0.1, 0.0, 1.0), "lowerarm_r": Vector3(0.35, -0.3, 0.88), "blade_r": Vector3(0.55, -0.45, 0.7)}],
+		[0.32, {"twist": 0.45, "lean": 0.15, "upperarm_r": Vector3(0.3, -0.55, 0.78), "lowerarm_r": Vector3(0.75, -0.6, 0.3), "blade_r": Vector3(0.75, -0.65, -0.1)}],
+	]
+	var out := {"a": a, "b": backhand, "c": c}
+	if side == "l":
+		out = {"a": _mirror_keys(a), "b": _mirror_keys(forehand), "c": _mirror_keys(c)}
+	for blow in out:
+		# Hold the last pose to the end of the move; the one-shot then fades back to the walk.
+		var keys: Array = out[blow]
+		var length: float = BLOWS[["a", "b", "c"].find(blow)]["length"]
+		keys.append([length, keys[keys.size() - 1][1]])
+	return out
+
+
+## The same poses for the other side of the body: right and left swapped, directions mirrored.
+static func _mirror_keys(keys: Array) -> Array:
+	var out: Array = []
+	for k in keys:
+		var m := {}
+		for key in k[1]:
+			var v: Variant = k[1][key]
+			var name: String = key
+			if name.ends_with("_r"):
+				name = name.trim_suffix("_r") + "_l"
+			elif name.ends_with("_l"):
+				name = name.trim_suffix("_l") + "_r"
+			if v is Vector3:
+				m[name] = Vector3(-v.x, v.y, v.z)
+			elif name == "twist":
+				m[name] = -float(v)
+			else:
+				m[name] = v
+		out.append([k[0], m])
+	return out
+
+
+## An upper-body clip made from arm poses. Each key is [time, {bone: direction}]: the bone is
+## turned from its pose in `base` so that it points that way (model space). Everything else in
+## the upper body keeps its pose from `base`, except that the right hand is closed as in `fist`.
+## A key may also hold "twist" and "lean" for the chest, and "blade_r" / "blade_l": the way
+## something held in that fist should point (see _grip).
+static func _aimed(sk: Skeleton3D, base: Animation, fist: Animation, keys: Array) -> Animation:
+	var names: Array = UPPER_BODY.duplicate()
+	for side in ["l", "r"]:
+		for finger in FINGERS:
+			for joint in 3:
+				names.append("%s_0%d_%s" % [finger, joint + 1, side])
+	var out := Animation.new()
+	out.loop_mode = Animation.LOOP_NONE
+	var tracks := {}
+	for n in names:
+		if sk.find_bone(n) >= 0:
+			var track := out.add_track(Animation.TYPE_ROTATION_3D)
+			out.track_set_path(track, NodePath("Armature/Skeleton3D:%s" % n))
+			tracks[n] = track
+	var child_of := {"upperarm_r": "lowerarm_r", "lowerarm_r": "hand_r", "upperarm_l": "lowerarm_l", "lowerarm_l": "hand_l"}
+	# The way out of each fist on the thumb side, in hand space: what "blade_*" aims.
+	var grips := {"r": fist_frame(sk, fist, 0.46, "r").basis.y, "l": fist_frame(sk, base, 0.0, "l").basis.y}
+	for key in keys:
+		var local := {}
+		for b in sk.get_bone_count():
+			local[b] = _anim_basis(base, sk, b, 0.0)
+		for finger in FINGERS:
+			for joint in 3:
+				var fb := sk.find_bone("%s_0%d_r" % [finger, joint + 1])
+				if fb >= 0:
+					local[fb] = _anim_basis(fist, sk, fb, 0.46)
+		var aims: Dictionary = key[1]
+		# The chest turns and bends, a third at each spine bone; the head turns back to the front.
+		var tw := float(aims.get("twist", 0.0))
+		var ln := float(aims.get("lean", 0.0))
+		if tw != 0.0 or ln != 0.0:
+			var r := Basis(Vector3.UP, tw / 3.0) * Basis(Vector3.RIGHT, ln / 3.0)
+			for n in ["spine_01", "spine_02", "spine_03"]:
+				_turn(sk, local, sk.find_bone(n), r)
+			_turn(sk, local, sk.find_bone("neck_01"), Basis(Vector3.UP, -tw * 0.6))
+		for n in ["upperarm_r", "lowerarm_r", "upperarm_l", "lowerarm_l"]:
+			if not aims.has(n):
+				continue
+			var b := sk.find_bone(n)
+			var parent := Basis.IDENTITY
+			var p := sk.get_bone_parent(b)
+			while p >= 0:
+				parent = (local[p] as Basis) * parent
+				p = sk.get_bone_parent(p)
+			var along: Vector3 = sk.get_bone_rest(sk.find_bone(child_of[n])).origin.normalized()
+			var from: Vector3 = ((local[b] as Basis) * along).normalized()
+			var to: Vector3 = (parent.inverse() * (aims[n] as Vector3)).normalized()
+			local[b] = Basis(Quaternion(from, to)) * (local[b] as Basis)
+		for side in ["r", "l"]:
+			if aims.has("blade_" + side):
+				_grip(sk, local, side, grips[side], (aims["blade_" + side] as Vector3).normalized())
+		for n in tracks:
+			out.rotation_track_insert_key(tracks[n], float(key[0]), (local[sk.find_bone(n)] as Basis).get_rotation_quaternion())
+	out.length = float(keys[keys.size() - 1][0])
+	return out
+
+
+## A bone's orientation in model space, from the local orientations in `local`.
+static func _model_basis(sk: Skeleton3D, local: Dictionary, bone: int) -> Basis:
+	var out := Basis.IDENTITY
+	var b := bone
+	while b >= 0:
+		out = (local[b] as Basis) * out
+		b = sk.get_bone_parent(b)
+	return out
+
+
+## Turns a bone by `r`, a rotation in model space.
+static func _turn(sk: Skeleton3D, local: Dictionary, bone: int, r: Basis) -> void:
+	var parent := _model_basis(sk, local, sk.get_bone_parent(bone))
+	local[bone] = parent.inverse() * r * parent * (local[bone] as Basis)
+
+
+## Points what is held in a fist (`grip`, hand space) the way `want` (model space): first the
+## forearm rolls about its length, then the wrist bends the rest of the way, but no further than a
+## wrist can.
+static func _grip(sk: Skeleton3D, local: Dictionary, side: String, grip: Vector3, want: Vector3) -> void:
+	var lower := sk.find_bone("lowerarm_" + side)
+	var hand := sk.find_bone("hand_" + side)
+	var parent := _model_basis(sk, local, sk.get_bone_parent(lower))
+	var ml: Basis = parent * (local[lower] as Basis)
+	var f := (ml * sk.get_bone_rest(hand).origin).normalized()
+	var mh: Basis = ml * (local[hand] as Basis)
+	var b := (mh * grip).normalized()
+	var bp := b - f * b.dot(f)
+	var dp := want - f * want.dot(f)
+	if bp.length() > 0.05 and dp.length() > 0.05:
+		var roll := clampf(bp.normalized().signed_angle_to(dp.normalized(), f), -ROLL_MAX, ROLL_MAX)
+		var r := Basis(f, roll)
+		local[lower] = parent.inverse() * r * ml
+		ml = r * ml
+		mh = ml * (local[hand] as Basis)
+		b = (mh * grip).normalized()
+	var axis := b.cross(want)
+	if axis.length() > 0.001:
+		var q := Basis(axis.normalized(), minf(b.angle_to(want), WRIST_MAX))
+		local[hand] = ml.inverse() * q * mh
+
+
+## A bone's local orientation in `anim` at `time`, or its rest orientation if the clip leaves it.
+static func _anim_basis(anim: Animation, sk: Skeleton3D, bone: int, time: float) -> Basis:
+	var track := anim.find_track(NodePath("Armature/Skeleton3D:%s" % sk.get_bone_name(bone)), Animation.TYPE_ROTATION_3D)
+	if track >= 0:
+		return Basis(anim.rotation_track_interpolate(track, time))
+	return sk.get_bone_rest(bone).basis
+
+
 func _clip(anim: String) -> AnimationNodeAnimation:
 	var node := AnimationNodeAnimation.new()
 	node.animation = anim
 	return node
+
+
+## The upper body and the fingers: what the moves of the arms play over.
+static func _upper_paths() -> Array:
+	var out: Array = []
+	for bone in UPPER_BODY:
+		out.append(NodePath("Armature/Skeleton3D:%s" % bone))
+	for side in ["l", "r"]:
+		for finger in FINGERS:
+			for joint in 3:
+				out.append(NodePath("Armature/Skeleton3D:%s_0%d_%s" % [finger, joint + 1, side]))
+	return out
 
 
 func _setup_animation(sex: int) -> void:
@@ -961,7 +1585,7 @@ func _setup_animation(sex: int) -> void:
 	_player.root_node = NodePath("..")
 	_player.add_animation_library("", _library(sex, skeleton))
 
-	# Legs follow the walk cycle; a strike or a sling throw plays over the upper body only.
+	# Legs follow the walk cycle; blows, the sling and the bow play over the upper body only.
 	var graph := AnimationNodeBlendTree.new()
 	var walk := AnimationNodeBlendSpace1D.new()
 	walk.min_space = 0.0
@@ -972,30 +1596,53 @@ func _setup_animation(sex: int) -> void:
 	walk.add_blend_point(_clip("Jog_Fwd"), 5.5, -1, &"jog")
 	walk.add_blend_point(_clip("Sprint"), 9.5, -1, &"sprint")
 	graph.add_node("walk", walk)
-	graph.add_node("strike_clip", _clip("Sword_Attack"))
-	graph.add_node("strike_speed", AnimationNodeTimeScale.new())
-	graph.add_node("punch_clip", _clip("Punch_Cross"))
-	graph.add_node("throw_clip", _clip("Spell_Simple_Shoot"))
-	for shot in ["strike", "punch", "throw"]:
+	var upper := _upper_paths()
+	# Poses held for as long as a button is: the sling going round, the bow drawn.
+	var below := "walk"
+	for held in [["whirl_hold", "Sling_Whirl"], ["draw_hold", "Bow_Draw"]]:
+		var blend := AnimationNodeBlend2.new()
+		blend.filter_enabled = true
+		for path in upper:
+			blend.set_filter_path(path, true)
+		graph.add_node(held[0], blend)
+		graph.add_node(held[1], _clip(held[1]))
+		var source: String = held[1]
+		if held[0] == "draw_hold":
+			# The draw starts from the beginning each time.
+			graph.add_node("draw_seek", AnimationNodeTimeSeek.new())
+			graph.connect_node("draw_seek", 0, held[1])
+			source = "draw_seek"
+		graph.connect_node(held[0], 0, below)
+		graph.connect_node(held[0], 1, source)
+		below = held[0]
+	# Each upper-body move is a one-shot laid over everything before it in this list. Blows have
+	# a speed of their own: a heavy weapon swings slower.
+	var shots := [
+		["blow_a_r", "Blow_A_R", 0.05, 0.15], ["blow_b_r", "Blow_B_R", 0.05, 0.12], ["blow_c_r", "Blow_C_R", 0.05, 0.15],
+		["blow_a_l", "Blow_A_L", 0.05, 0.15], ["blow_b_l", "Blow_B_L", 0.05, 0.12], ["blow_c_l", "Blow_C_L", 0.05, 0.15],
+		["punch", "Punch_Cross", 0.06, 0.15], ["throw", "Sling_Release", 0.04, 0.15], ["loose", "Bow_Loose", 0.03, 0.15],
+		["reach_back", "Reach_Back", 0.12, 0.12], ["reach_hip", "Reach_Hip", 0.12, 0.12],
+	]
+	for s in shots:
+		var shot: String = s[0]
 		var one := AnimationNodeOneShot.new()
-		one.fadein_time = 0.06
-		one.fadeout_time = 0.15
+		one.fadein_time = float(s[2])
+		one.fadeout_time = float(s[3])
 		one.filter_enabled = true
-		for bone in UPPER_BODY:
-			one.set_filter_path(NodePath("Armature/Skeleton3D:%s" % bone), true)
-		for side in ["l", "r"]:
-			for finger in FINGERS:
-				for joint in 3:
-					one.set_filter_path(NodePath("Armature/Skeleton3D:%s_0%d_%s" % [finger, joint + 1, side]), true)
+		for path in upper:
+			one.set_filter_path(path, true)
 		graph.add_node(shot, one)
-	graph.connect_node("strike_speed", 0, "strike_clip")
-	graph.connect_node("strike", 0, "walk")
-	graph.connect_node("strike", 1, "strike_speed")
-	graph.connect_node("punch", 0, "strike")
-	graph.connect_node("punch", 1, "punch_clip")
-	graph.connect_node("throw", 0, "punch")
-	graph.connect_node("throw", 1, "throw_clip")
-	graph.connect_node("output", 0, "throw")
+		var source: String = s[1]
+		if not graph.has_node(source):
+			graph.add_node(source, _clip(source))
+		if shot.begins_with("blow") or shot == "punch":
+			graph.add_node(shot + "_speed", AnimationNodeTimeScale.new())
+			graph.connect_node(shot + "_speed", 0, source)
+			source = shot + "_speed"
+		graph.connect_node(shot, 0, below)
+		graph.connect_node(shot, 1, source)
+		below = shot
+	graph.connect_node("output", 0, below)
 
 	_tree = AnimationTree.new()
 	_model.add_child(_tree)
@@ -1005,9 +1652,15 @@ func _setup_animation(sex: int) -> void:
 	if bool(_opts.get("always_animate", false)):
 		_tree.process_mode = Node.PROCESS_MODE_ALWAYS
 	_tree.active = true
-	_tree.set("parameters/strike_speed/scale", STRIKE_SPEED)
+	for s in shots:
+		if str(s[0]).begins_with("blow") or s[0] == "punch":
+			_tree.set("parameters/%s_speed/scale" % s[0], 1.0)
 	_tree.set("parameters/walk/blend_position", 0.0)
 	_tree.advance(0.0)
+
+
+var _whirl_blend := 0.0
+var _draw_blend := 0.0
 
 
 ## Call every frame with the horizontal speed in metres per second (0 when standing).
@@ -1018,32 +1671,203 @@ func animate(delta: float, speed: float) -> void:
 	_tree.set("parameters/walk/blend_position", _speed)
 	if _strike_left > 0.0:
 		_strike_left -= delta
-		if _strike_left <= 0.0 and weapon != null:
-			weapon.transform = _carry
+	# What each hand holds turns smoothly between how it is carried and how it is gripped for a
+	# blow (or, for a bow, held up to shoot), so it never jumps out of the fist.
+	var k := 1.0 - exp(-28.0 * delta)
+	if weapon != null and weapon.get_parent() == hand_r:
+		var target := _strike if _strike_left > 0.0 and _strike_side == "r" else _carry
+		weapon.transform = weapon.transform.interpolate_with(target, k)
+	if offhand != null and offhand.get_parent() == hand_l:
+		var up := (_strike_left > 0.0 and _strike_side == "l") or (offhand_kind == "bow" and (drawing or _loose_t >= 0.0))
+		offhand.transform = offhand.transform.interpolate_with(_strike_l if up else _carry_l, k)
+	if _swap_left >= 0.0:
+		_swap_left -= delta
+		if _swap_left < 0.0:
+			sheathe(not sheathed)
+
+	_whirl_blend = move_toward(_whirl_blend, 1.0 if _whirling else 0.0, delta * 10.0)
+	_tree.set("parameters/whirl_hold/blend_amount", _whirl_blend)
+	if _whirling:
+		_whirl_t += delta
+		_sling_turn(_throw_yaw + _whirl_t * 17.0, 0.35)
+		if _auto_release >= 0.0 and _whirl_t >= _auto_release:
+			sling_release()
+	if _throw_t >= 0.0:
+		_throw_t += delta
+		if _throw_t < RELEASE:
+			_sling_turn(_throw_yaw + (_whirl_t + _throw_t) * 17.0, 0.35)
+		else:
+			_sling_pouch.get_node("Stone").visible = false
+			var droop := clampf((_throw_t - RELEASE) / 0.15, 0.0, 1.0)
+			_sling_turn(_throw_yaw + PI, lerpf(0.35, 1.3, droop))
+		if _throw_t >= THROW_TIME:
+			_throw_t = -1.0
+			_sling.visible = false
+			if _stowed_for_throw:
+				_stowed_for_throw = false
+				_right_away(false)
+
+	if drawing:
+		draw_amount = minf(1.0, draw_amount + delta / DRAW_TIME)
+	_draw_blend = move_toward(_draw_blend, 1.0 if drawing else 0.0, delta * 12.0)
+	_tree.set("parameters/draw_hold/blend_amount", _draw_blend)
+	if _loose_t >= 0.0:
+		_loose_t += delta
+		if _loose_t >= LOOSE_TIME:
+			_loose_t = -1.0
+	_update_bow()
 
 
 ## A blow with the weapon in the right hand, or a punch if the hand is empty.
 func swing() -> void:
+	attack(0)
+
+
+## Blow `step` of a combo (see BLOWS), made with the right hand ("r") or the left ("l"), at
+## `speed` (1 = normal). A hand with no weapon punches. A blow that follows another takes over.
+func attack(step: int, side: String = "r", speed: float = 1.0) -> void:
 	if _tree == null or dead:
 		return
-	var shot := "punch" if weapon_kind == "none" else "strike"
+	var m: Dictionary = BLOWS[clampi(step, 0, BLOWS.size() - 1)]
+	var held := weapon_kind if side == "r" else offhand_kind
+	var armed := is_weapon(held)
+	var shot := "%s_%s" % [m["shot"], side] if armed else "punch"
+	if _shot != "" and _shot != shot:
+		_tree.set("parameters/%s/request" % _shot, AnimationNodeOneShot.ONE_SHOT_REQUEST_FADE_OUT)
+	_tree.set("parameters/%s_speed/scale" % shot, speed)
+	_play(shot)
+	_shot = shot
+	_strike_side = side
+	if armed:
+		_strike_left = float(m["length"]) / speed
+
+
+func _play(shot: String) -> void:
 	_tree.set("parameters/%s/request" % shot, AnimationNodeOneShot.ONE_SHOT_REQUEST_FIRE)
-	if weapon != null:
-		weapon.transform = _strike
-		_strike_left = STRIKE_TIME
 
 
-## The throwing motion used for the sling.
-func whirl() -> void:
+## Puts the right hand's weapon on the back or belt for a moment (true), or back in the hand.
+func _right_away(on: bool) -> void:
+	if weapon == null:
+		return
+	var holder: Node3D = _holder(weapon_kind) if on else _hand_holder("r", weapon_kind)
+	if weapon.get_parent() != holder:
+		weapon.get_parent().remove_child(weapon)
+		holder.add_child(weapon)
+	weapon.transform = _stow if on else _carry
+
+
+## Starts whirling the sling overhead. It keeps going round until sling_release().
+func sling_start() -> void:
 	if _tree == null or dead:
 		return
-	_tree.set("parameters/throw/request", AnimationNodeOneShot.ONE_SHOT_REQUEST_FIRE)
+	_whirling = true
+	_whirl_t = 0.0
+	_auto_release = -1.0
+	_throw_t = -1.0
+	_throw_yaw = global_rotation.y
+	_sling.visible = true
+	_sling_pouch.get_node("Stone").visible = true
+	_sling_turn(_throw_yaw, 0.35)
+	if weapon != null and not sheathed and weapon.get_parent() == hand_r:
+		# The weapon goes on the back or belt for the throw, and comes back to the hand after.
+		_right_away(true)
+		_stowed_for_throw = true
+
+
+## Lets the sling go: the arm comes over, and the stone leaves RELEASE seconds later.
+func sling_release() -> void:
+	if not _whirling:
+		return
+	_whirling = false
+	_auto_release = -1.0
+	_play("throw")
+	_throw_t = 0.0
+
+
+## A whole throw: whirled for WHIRL_TIME, then let go (enemies, and the checks).
+func whirl() -> void:
+	sling_start()
+	_auto_release = WHIRL_TIME
+
+
+func whirling() -> bool:
+	return _whirling
+
+
+## Starts drawing the bow; it stays drawn until bow_loose().
+func bow_draw() -> void:
+	if offhand_kind != "bow" or dead or _tree == null:
+		return
+	if sheathed:
+		sheathe(false)
+	drawing = true
+	draw_amount = 0.0
+	_loose_t = -1.0
+	_tree.set("parameters/draw_seek/seek_request", 0.0)
+
+
+## Lets the arrow go. Returns how far the bow was drawn (0..1).
+func bow_loose() -> float:
+	if not drawing:
+		return 0.0
+	var amount := draw_amount
+	drawing = false
+	draw_amount = 0.0
+	_play("loose")
+	_loose_t = 0.0
+	return amount
+
+
+## The string runs from tip to tip, or to the drawing hand while the bow is drawn; the arrow lies
+## on the string from the hand to the grip.
+func _update_bow() -> void:
+	if offhand == null or offhand_kind != "bow" or _string.size() < 2:
+		return
+	var tips := [offhand.get_node("Tip0").global_position, offhand.get_node("Tip1").global_position]
+	var nock: Vector3 = (tips[0] + tips[1]) * 0.5
+	var in_hand := offhand.get_parent() == hand_l
+	var pulled := in_hand and _draw_blend > 0.05
+	if pulled:
+		nock = nock.lerp(hand_r.global_transform * _strike.origin, _draw_blend)
+	for k in 2:
+		_stretch(_string[k], tips[k], nock)
+	if _arrow != null:
+		_arrow.visible = pulled and drawing
+		if _arrow.visible:
+			var grip: Vector3 = offhand.global_position
+			var y := (grip - nock).normalized()
+			var x := y.cross(Vector3.UP if absf(y.y) < 0.95 else Vector3.RIGHT).normalized()
+			var s := global_transform.basis.get_scale().x
+			_arrow.global_transform = Transform3D(Basis(x, y, x.cross(y)).scaled(Vector3.ONE * s), nock)
+
+
+## Stretches a unit-long cylinder between two points in its parent's space.
+static func _segment(n: Node3D, a: Vector3, b: Vector3) -> void:
+	var d := b - a
+	var y := d.normalized()
+	var x := y.cross(Vector3.UP if absf(y.y) < 0.95 else Vector3.RIGHT).normalized()
+	n.transform = Transform3D(Basis(x, d, x.cross(y)), (a + b) * 0.5)
+
+
+## Stretches a unit-long cylinder between two points in the world.
+static func _stretch(n: Node3D, a: Vector3, b: Vector3) -> void:
+	var d := b - a
+	var length := d.length()
+	if length < 0.001:
+		return
+	var y := d / length
+	var x := y.cross(Vector3.UP if absf(y.y) < 0.95 else Vector3.RIGHT).normalized()
+	n.global_transform = Transform3D(Basis(x, y * length, x.cross(y)), (a + b) * 0.5)
 
 
 func die() -> void:
 	if dead or _tree == null:
 		return
 	dead = true
+	_whirling = false
+	drawing = false
+	_model.rotation.y = PI
 	_tree.active = false
 	_player.play("Death01")
 

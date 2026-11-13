@@ -225,8 +225,14 @@ func _complete(q: Dictionary, factor: float, words: String) -> void:
 	Game.silver += silver
 	var text := "%s\n\n[i]You receive %d silver." % [words, silver]
 	if factor >= 1.0 and q.has("reward_item"):
-		var inst := Game.add_item(str(q["reward_item"]))
-		text += " You are given a %s. Press Tab to equip it." % Game.item_name(inst).to_lower()
+		var id := str(q["reward_item"])
+		var inst := Game.add_item(id)
+		if inst.is_empty():
+			# No room in the bag: it is left at the scout's feet.
+			world.spawn_pickup("item", id, world.player.global_position + Vector3(0.8, 0, 0.8))
+			text += " You are given a %s, but your bag is full; it lies at your feet." % str(Game.Items.ITEMS[id]["name"]).to_lower()
+		else:
+			text += " You are given a %s. Press I to see it." % Game.item_name(inst).to_lower()
 	text += "[/i]"
 	q["status"] = "done"
 	q["npc"].set_mark("")

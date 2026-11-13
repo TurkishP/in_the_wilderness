@@ -3,6 +3,7 @@ extends CharacterBody3D
 
 const ProjectileScript := preload("res://scripts/projectile.gd")
 const HumanScript := preload("res://scripts/human.gd")
+const CreatureScript := preload("res://scripts/creature.gd")
 const GRAVITY := 20.0
 
 var world
@@ -30,6 +31,7 @@ var _cd := 0.0
 var _windup := -1.0
 var _vis: Node3D
 var _fig: Node3D   # the human figure, for human enemies only
+var _beast: Node3D # the animal model, for wildlife
 var _bar: MeshInstance3D
 
 
@@ -81,42 +83,11 @@ func _build(sc: float) -> void:
 	_vis.scale = Vector3.ONE * sc
 	add_child(_vis)
 	match shape_name:
-		"snake":
-			var b := Game.mesh_capsule(0.11, 1.5, color)
-			b.rotation.x = PI * 0.5
-			b.position.y = 0.12
-			_vis.add_child(b)
-			var h := Game.mesh_sphere(0.16, color.darkened(0.25))
-			h.position = Vector3(0, 0.22, -0.78)
-			_vis.add_child(h)
-		"scorpion":
-			var b := Game.mesh_sphere(0.4, color)
-			b.scale = Vector3(1.0, 0.4, 1.4)
-			b.position.y = 0.22
-			_vis.add_child(b)
-			var tail := Game.mesh_cyl(0.05, 0.09, 0.9, color)
-			tail.position = Vector3(0, 0.6, 0.5)
-			tail.rotation.x = -0.6
-			_vis.add_child(tail)
-			var sting := Game.mesh_sphere(0.1, Color(0.6, 0.15, 0.1))
-			sting.position = Vector3(0, 1.0, 0.3)
-			_vis.add_child(sting)
-			for side in [-1.0, 1.0]:
-				var claw := Game.mesh_box(Vector3(0.14, 0.1, 0.5), color)
-				claw.position = Vector3(0.32 * side, 0.2, -0.65)
-				_vis.add_child(claw)
-		"beast":
-			var b := Game.mesh_box(Vector3(0.4, 0.45, 1.0), color)
-			b.position.y = 0.6
-			_vis.add_child(b)
-			var h := Game.mesh_box(Vector3(0.3, 0.3, 0.42), color.darkened(0.15))
-			h.position = Vector3(0, 0.85, -0.62)
-			_vis.add_child(h)
-			for lx in [-0.15, 0.15]:
-				for lz in [-0.38, 0.38]:
-					var leg := Game.mesh_box(Vector3(0.09, 0.42, 0.09), color.darkened(0.25))
-					leg.position = Vector3(lx, 0.21, lz)
-					_vis.add_child(leg)
+		"snake", "scorpion", "beast":
+			# Animals are low-poly models animated in code (creature.gd).
+			_beast = CreatureScript.new()
+			_vis.add_child(_beast)
+			_beast.build(shape_name, color)
 		_:
 			var look: Dictionary = HumanScript.random_look(Game.rng, 0)
 			look["head"] = 1
@@ -236,15 +207,15 @@ func _physics_process(delta: float) -> void:
 		_vis.rotation.y = lerp_angle(_vis.rotation.y, atan2(-face.x, -face.z), 10.0 * delta)
 	if _fig != null:
 		_fig.animate(delta, Vector2(velocity.x, velocity.z).length())
+	if _beast != null:
+		_beast.animate(delta, Vector2(velocity.x, velocity.z).length())
 
 
 func _lunge() -> void:
 	if _fig != null:
 		_fig.swing()
-		return
-	var tw := create_tween()
-	tw.tween_property(_vis, "position:y", 0.35, 0.18)
-	tw.tween_property(_vis, "position:y", 0.0, 0.2)
+	elif _beast != null:
+		_beast.strike()
 
 
 func _shoot(player) -> void:
@@ -296,5 +267,8 @@ func _die() -> void:
 		_fig.die()
 		tw.tween_interval(2.6)
 	else:
-		tw.tween_property(_vis, "scale", Vector3.ONE * 0.05, 0.3)
+		# Animals roll onto their side, lie still a moment, and sink away.
+		tw.tween_property(_vis, "rotation:z", PI * 0.5, 0.35)
+		tw.tween_interval(1.2)
+		tw.tween_property(_vis, "scale", Vector3.ONE * 0.05, 0.4)
 	tw.tween_callback(queue_free)

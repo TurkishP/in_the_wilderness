@@ -18,6 +18,8 @@ const CUBIT := 0.457
 const COURT := Vector2(100.0 * CUBIT, 50.0 * CUBIT)     # east-west by north-south
 const GAP := 1.4              # least space between two tents
 const PLAZA_RADIUS := 15.0
+const HOME_OFFSET := Vector3(-12.0, 0, 14.0)   # the scout's tent, from the middle of the plaza
+const HOME_RADIUS := 3.0
 const CLOTHS := [Color(0.86, 0.8, 0.68), Color(0.74, 0.62, 0.46), Color(0.6, 0.45, 0.33), Color(0.5, 0.38, 0.3), Color(0.82, 0.76, 0.6)]
 const DARKS := [Color(0.17, 0.14, 0.13), Color(0.24, 0.19, 0.16), Color(0.3, 0.24, 0.2)]
 const WOOD := Color(0.4, 0.28, 0.17)
@@ -41,6 +43,10 @@ var cloud: Node3D                    # over the tabernacle
 var guide: Node3D                    # the pillar of cloud standing by the camp before there is a tabernacle
 var _site: Node3D
 var _lights := 0
+var home := Vector3.ZERO              # the scout's own tent, at the edge of the plaza
+var home_door := Vector3.ZERO         # where to stand to go in
+var home_facing := 0.0                # yaw of someone walking out of the door
+var waters: Array = []                # [{pos, kind}] places to drink: "barrel" or "cups"
 
 
 func build(stage_index: int, rng: RandomNumberGenerator) -> void:
@@ -52,10 +58,16 @@ func build(stage_index: int, rng: RandomNumberGenerator) -> void:
 		raise_tabernacle()
 	elif stage_index == 2:
 		_mark_site()
+	home = plaza + HOME_OFFSET
 	_pitch_tents(rng)
 	_plan_spots()
 	_place_props(rng)
 	_place_flock(rng)
+	_build_home()
+	# Water stations get their own random numbers, so the rest of the layout is as before.
+	var wrng := RandomNumberGenerator.new()
+	wrng.seed = rng.seed * 7 + 11
+	_place_waters(wrng)
 	_plan_paths(rng)
 
 
@@ -98,6 +110,8 @@ func _reserved(p: Vector2, r: float) -> bool:
 	var pl := Vector2(plaza.x, plaza.z)
 	if p.distance_to(pl) < PLAZA_RADIUS + r:
 		return true
+	if p.distance_to(Vector2(home.x, home.z)) < HOME_RADIUS + 2.0 + r:
+		return true                                   # the scout's own tent and its doorway
 	if absf(p.x - pl.x) < 4.0 + r and p.y > pl.y:
 		return true                                   # the way in from the south
 	if has_court:
@@ -193,6 +207,102 @@ func _tent(kind: String, p: Vector2, angle: float, s: float, rng: RandomNumberGe
 			for k in [-1.0, 1.0]:
 				_add(node, Game.mesh_cyl(0.04, 0.04, 0.5, WOOD), Vector3(0, size.y + 0.15, k * size.z * 0.3))
 			_solid(node, Vector3(size.x * 0.85, size.y, size.z), Vector3(0, size.y * 0.5, 0))
+
+
+## The scout's own tent: a family tent of striped cloth with its door open toward the plaza and
+## a pennant on the ridge pole, so it can be found. Going in leads to its inside (home.gd).
+func _build_home() -> void:
+	var to_plaza := Vector3(plaza.x - home.x, 0, plaza.z - home.z).normalized()
+	var node := Node3D.new()
+	node.name = "HomeTent"
+	add_child(node)
+	node.position = home
+	node.rotation.y = atan2(to_plaza.x, to_plaza.z)      # +Z of the tent faces the plaza
+	var cloth := Color(0.84, 0.76, 0.6)
+	var stripe := Color(0.55, 0.16, 0.13)
+	var size := Vector3(4.0, 2.8, 5.0)
+	var prism := PrismMesh.new()
+	prism.size = size
+	_add(node, _mesh(prism, cloth), Vector3(0, size.y * 0.5, 0))
+	# Woven bands of red and blue across both slopes.
+	for k in 3:
+		var band := PrismMesh.new()
+		band.size = Vector3(size.x + 0.04, size.y + 0.02, 0.22)
+		_add(node, _mesh(band, stripe if k != 1 else Color(0.2, 0.28, 0.5)), Vector3(0, size.y * 0.5, -1.6 + k * 1.6))
+	# The doorway: a dark opening with the flap rolled up above it.
+	var door := PrismMesh.new()
+	door.size = Vector3(1.3, 1.9, 0.06)
+	_add(node, _mesh(door, Color(0.12, 0.09, 0.07)), Vector3(0, 0.95, size.z * 0.5 + 0.01))
+	_add(node, Game.mesh_cyl(0.09, 0.09, 1.4, cloth.darkened(0.15)), Vector3(0, 1.95, size.z * 0.5 + 0.06), Vector3(0, 0, PI * 0.5))
+	for side in [-1.0, 1.0]:
+		_add(node, Game.mesh_cyl(0.04, 0.04, 2.0, WOOD), Vector3(side * 0.75, 1.0, size.z * 0.5 + 0.35))
+	# Ridge poles, and a pennant on the front one.
+	for k in [-1.0, 1.0]:
+		_add(node, Game.mesh_cyl(0.045, 0.045, 0.9, WOOD), Vector3(0, size.y + 0.3, k * size.z * 0.3))
+	var flag := Game.mesh_box(Vector3(0.03, 0.32, 0.55), Color(0.2, 0.28, 0.55))
+	_add(node, flag, Vector3(0, size.y + 0.6, size.z * 0.3 + 0.3))
+	_solid(node, Vector3(size.x * 0.85, size.y, size.z), Vector3(0, size.y * 0.5, 0))
+	var sign := Game.label3d("Your tent", 64, Color(1.0, 0.92, 0.7))
+	sign.position = Vector3(0, size.y + 1.3, 0)
+	sign.visibility_range_end = 35.0
+	node.add_child(sign)
+	home_door = home + to_plaza * (size.z * 0.5 + 1.0)
+	home_facing = atan2(-to_plaza.x, -to_plaza.z)
+
+
+## Places to drink about the camp: wooden water barrels, and low tables with a jug and cups.
+## Two stand on the plaza; the rest are among the tents.
+func _place_waters(rng: RandomNumberGenerator) -> void:
+	_water_station("barrel", plaza + Vector3(3.8, 0, -6.8), rng)
+	_water_station("cups", plaza + Vector3(-4.2, 0, 9.2), rng)
+	var tries := 0
+	while waters.size() < 8 and tries < 600:
+		tries += 1
+		var p := Vector2(rng.randf_range(-reach.x, reach.x), rng.randf_range(-reach.y, reach.y))
+		if _reserved(p, 0.8) or _blocked(p, 0.9):
+			continue
+		var far := true
+		for w in waters:
+			if p.distance_to(Vector2((w["pos"] as Vector3).x, (w["pos"] as Vector3).z)) < 14.0:
+				far = false
+		if far:
+			_water_station("barrel" if waters.size() % 2 == 0 else "cups", Vector3(p.x, 0, p.y), rng)
+
+
+func _water_station(kind: String, at: Vector3, rng: RandomNumberGenerator) -> void:
+	var node := Node3D.new()
+	add_child(node)
+	node.position = at
+	node.rotation.y = rng.randf() * TAU
+	var wood := WOOD.lightened(0.1)
+	var water := Color(0.25, 0.45, 0.55)
+	if kind == "barrel":
+		# A staved barrel bound with dark hoops, its lid pushed aside, a dipper hanging on it.
+		_add(node, Game.mesh_cyl(0.36, 0.33, 0.95, wood), Vector3(0, 0.475, 0))
+		_add(node, Game.mesh_cyl(0.375, 0.375, 0.5, wood.darkened(0.06)), Vector3(0, 0.5, 0))
+		for y in [0.12, 0.5, 0.86]:
+			_add(node, Game.mesh_cyl(0.385, 0.385, 0.05, Color(0.2, 0.16, 0.12)), Vector3(0, y, 0))
+		_add(node, Game.mesh_cyl(0.33, 0.33, 0.02, water, 0.15), Vector3(0, 0.9, 0))
+		_add(node, Game.mesh_cyl(0.3, 0.3, 0.04, wood.darkened(0.1)), Vector3(0.22, 0.97, 0.12), Vector3(0.12, 0, 0.18))
+		_add(node, Game.mesh_cyl(0.015, 0.015, 0.45, wood.darkened(0.2)), Vector3(-0.3, 0.9, 0), Vector3(0, 0, 0.9))
+		_add(node, Game.mesh_sphere(0.06, wood.darkened(0.2)), Vector3(-0.47, 0.72, 0))
+	else:
+		# A low table with a clay jug and three wooden cups.
+		_add(node, Game.mesh_box(Vector3(0.9, 0.06, 0.6), wood), Vector3(0, 0.42, 0))
+		for cx in [-0.38, 0.38]:
+			for cz in [-0.24, 0.24]:
+				_add(node, Game.mesh_box(Vector3(0.06, 0.4, 0.06), wood.darkened(0.15)), Vector3(cx, 0.2, cz))
+		var clay := Color(0.7, 0.42, 0.28)
+		_add(node, Game.mesh_cyl(0.11, 0.16, 0.32, clay), Vector3(-0.2, 0.61, 0))
+		_add(node, Game.mesh_cyl(0.06, 0.1, 0.1, clay), Vector3(-0.2, 0.82, 0))
+		_add(node, Game.mesh_cyl(0.07, 0.06, 0.05, clay.darkened(0.1)), Vector3(-0.2, 0.9, 0))
+		_add(node, Game.mesh_box(Vector3(0.03, 0.2, 0.05), clay.darkened(0.1)), Vector3(-0.05, 0.66, 0), Vector3(0, 0, -0.3))
+		for k in 3:
+			_add(node, Game.mesh_cyl(0.05, 0.04, 0.09, Color(0.5, 0.36, 0.22)), Vector3(0.12 + (k % 2) * 0.13, 0.5, -0.14 + k * 0.14))
+		# Two large water jars beside the table.
+		for k in 2:
+			_add(node, Game.mesh_cyl(0.2, 0.28, 0.7, clay.darkened(0.05)), Vector3(0.75 + k * 0.5, 0.35, 0.1))
+	waters.append({"pos": at, "kind": kind})
 
 
 func _mesh(mesh: Mesh, color: Color) -> MeshInstance3D:
@@ -497,6 +607,12 @@ func _blocked(p: Vector2, margin: float) -> bool:
 			return true
 	if _in_court(p, margin + 0.4):
 		return true
+	if p.distance_to(Vector2(home.x, home.z)) < HOME_RADIUS + margin:
+		return true
+	for w in waters:
+		var wp: Vector3 = w["pos"]
+		if p.distance_to(Vector2(wp.x, wp.z)) < 0.7 + margin:
+			return true
 	for s in spots:
 		var sp: Vector3 = s["pos"]
 		if p.distance_to(Vector2(sp.x, sp.z)) < 1.2 + margin:

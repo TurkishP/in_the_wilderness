@@ -8,6 +8,7 @@ var payload: Variant = null
 var radius := 1.9
 var _vis: Node3D
 var _t := 0.0
+var _full_warned := false
 
 
 func setup(k: String, p: Variant, label: String, color: Color) -> void:
@@ -46,7 +47,15 @@ func _process(delta: float) -> void:
 	_vis.position.y = 0.35 + sin(_t * 2.5) * 0.08
 	var p = world.player
 	if is_instance_valid(p) and not p.dead and p.global_position.distance_to(global_position) < radius:
+		# Gear takes places in the bag; when there is no room for it, it stays where it lies.
+		if kind == "item" and not Game.can_take(str(payload)):
+			if not _full_warned:
+				_full_warned = true
+				Game.say("Your bag is full. Store or sell something to make room.")
+			return
 		collect()
+	else:
+		_full_warned = false
 
 
 func collect() -> void:
@@ -59,7 +68,7 @@ func collect() -> void:
 			Game.say("+%d bronze" % int(payload))
 		"item":
 			var inst := Game.add_item(str(payload))
-			Game.say("Found: %s. Press Tab to equip it." % Game.item_name(inst))
+			Game.say("Found: %s. Press I to see it." % Game.item_name(inst))
 		"quest":
 			world.quests.on_gather(int(payload))
 		"objective":

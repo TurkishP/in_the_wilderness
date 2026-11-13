@@ -81,7 +81,11 @@ Vulkan, Direct3D 12 or Metal is enough.
 
 Everything after the bare `--` is a debug argument of the game. The full list is at the top of
 [scripts/world.gd](scripts/world.gd): teleporting to the objective, starting a raid, opening a
-menu, skipping objectives.
+menu (`--menu=gear|trade|chest|lid|settings`), equipping gear (`--equip=bronze_spear,hide_shield`),
+holding the sling or bow for a screenshot (`--aim=sling|bow`), skipping objectives.
+
+The music is made by [tools/make_music.py](tools/make_music.py) (needs Python with numpy, and
+ffmpeg). Run it again only to change the music; the `.ogg` files it writes are committed.
 
 Run the self-test after every change, and take a screenshot after any visual change.
 
@@ -91,15 +95,46 @@ Run the self-test after every change, and take a screenshot after any visual cha
 |---|---|
 | W A S D | Move |
 | Mouse | Look |
-| Shift | Sprint (costs thirst) |
+| Shift | Sprint (costs thirst and stamina; walk to get your breath back) |
 | Space | Jump |
-| Left mouse | Strike with the staff or blade |
-| Right mouse | Sling a stone at the crosshair |
+| Left mouse | Strike. Press again during a blow for the next one: a cut from top to bottom, a sweep from left to right, then a cut from top right to bottom left. With a blade in each hand the sweep is the left hand's. Heavier weapons swing more slowly. With a bow: hold to draw, release to shoot |
+| Right mouse | Hold to whirl the sling, release to throw. While it goes round, a dotted arc and a ring show where the stone will land (red on an enemy). Each throw uses up a stone |
+| R | Put both hands' gear away (staff, spear, bow and shield on the back, blades at the belt) or take it up. Attacking takes it up by itself |
 | E | Talk or use |
 | Q | Drink from the waterskin |
-| Tab | Gear |
+| I (or Tab) | Inventory: the bag on the left, what you wear and wield on the right |
 | M | Map of the journey |
-| Esc | Pause menu, controls, and "Change how you look" |
+| Esc | Pause menu: controls, settings, "Change how you look" |
+
+### Carrying, water and saving
+
+- **Bag:** a grid of places, and bigger things take more of them: a dagger 1x2, a sword 1x3, a
+  spear or staff 1x4, a shield 2x2 or 2x3, a robe 2x4. Sling stones stack five to a place and
+  arrows twenty. The belt pouch is 6x4; the trader sells a shoulder bag (8x5) and a traveller's
+  pack (10x6), and stones and arrows by the handful. Stones are also gathered with E from stony
+  patches out in the wilderness. Gear lying on the ground stays there while the bag has no room.
+- **Inventory (I):** click an item to pick it up and click again to put it down, on a free place,
+  on another item to swap them, or on a slot to wear it. Right-click equips, or takes off into
+  the bag. Hovering shows what an item does. Slots: head, neck, right hand, left hand, upper
+  body, belt, lower body, sling. Either hand takes a weapon or a shield, so two swords can be
+  wielded; a bow takes both hands; a robe or dress takes the place of top and bottom. What is
+  worn shows on the figure.
+- **Stats:** each item may give damage, defense, health, thirst regen (thirst won back per
+  second, against the heat) and stamina regen, and has a weight. Defense stops a share of each
+  blow (40 defense stops half). A weapon's weight sets its swing speed: about 1.5 kg swings at
+  normal speed, a dagger much faster, a mace or axe slower. Gear comes in six tiers, from flint
+  and wood to iron and the rare finds; the trader sells the current stage's tier and the one
+  before.
+- **Trader:** the goods are laid out beside your bag. Click to buy; right-click your own things
+  to sell, or drop them on the trader's side.
+- **Water:** besides the jars by the fire, wooden barrels (fill the waterskin) and tables with
+  a jug and cups (a drink on the spot) stand about the camp. They are dry until the camp has
+  water, as at the first stage before Marah.
+- **Your tent** stands at the edge of the gathering ground, marked with a pennant. Inside are
+  a bed, a chest (14x10 places, kept for the whole journey; its lid swings open while it is in
+  use, with the bag beside it on screen) and a water jar. Sleeping in
+  the bed restores health and saves the game, and this is the only way to save: loading wakes
+  you there with the stage's objectives as they were. If you fall, you are carried back to it.
 
 ## How the game is put together
 
@@ -110,24 +145,28 @@ in order, then walking to the pillar of cloud.
 | File | What it holds |
 |---|---|
 | [data/stages.gd](data/stages.gd) | The ten stages: texts, scripture references, main objectives, side quests, raid settings |
-| [data/items.gd](data/items.gd) | Weapons, slings and armor |
+| [data/items.gd](data/items.gd) | Everything that can be carried, worn or wielded: slot, size in the bag, weight, stats, tier, price, how it looks when worn; the bag sizes |
 | [data/enemies.gd](data/enemies.gd) | Wildlife, raiders and bosses |
 | [data/region.gd](data/region.gd) | A coarse model of the Sinai, the Negev, Edom and Moab: mountain masses, ranges, the rift valley, coastlines |
 | [data/talk.gd](data/talk.gd) | What ordinary people in the camp say, stage by stage, with the passage each group of lines draws on |
-| [scripts/game.gd](scripts/game.gd) | Autoload `Game`: saved state, gear rules, save file, mesh helpers |
+| [scripts/game.gd](scripts/game.gd) | Autoload `Game`: saved state, the bag and chest grids, equipment and stats, save file, settings, music, mesh helpers |
 | [scripts/world.gd](scripts/world.gd) | Builds a stage, runs the main objectives, holds the debug arguments and the self-test |
 | [scripts/quests.gd](scripts/quests.gd) | Side quests: gather items, find a lost child, investigate a wrongdoer |
 | [scripts/raid_director.gd](scripts/raid_director.gd) | Raids on the camp, growing with each raid and each stage |
-| [scripts/hud.gd](scripts/hud.gd) | All interface. Every menu is one `dialog()` call; the character creator is its own panel |
+| [scripts/hud.gd](scripts/hud.gd) | All interface. Most menus are one `dialog()` call; the character creator and the settings page are panels of their own |
+| [scripts/inventory_ui.gd](scripts/inventory_ui.gd) | The inventory, chest and trader screens: grids, equipment slots, item pictures and tooltips |
 | [scripts/human.gd](scripts/human.gd) | The human figure used for the player, camp people and raiders: option tables, body and hair, generated clothes, weapons, animation |
 | [scripts/retarget.gd](scripts/retarget.gd) | Converts the animation kit's clips to the character kit's skeleton when the game starts |
 | [scripts/terrain.gd](scripts/terrain.gd) | One stage's land: detailed ground, far backdrop and water, all taken from the region model |
 | [scripts/scenery.gd](scripts/scenery.gd) | Rocks, dry grass, bushes and acacias, drawn in batches |
-| [scripts/camp.gd](scripts/camp.gd) | The camp: tents, cooking fires, flocks, the tabernacle, places for people to sit and work, and the paths they walk |
+| [scripts/camp.gd](scripts/camp.gd) | The camp: tents, cooking fires, flocks, the tabernacle, places for people to sit and work, water barrels and cups, the scout's own tent, and the paths they walk |
+| [scripts/home.gd](scripts/home.gd) | The inside of the scout's own tent: bed (the only place the game is saved), chest, water jar |
+| [scripts/creature.gd](scripts/creature.gd) | The animals (viper, scorpion, jackal): low-poly models built and animated in code |
 | [scripts/minimap.gd](scripts/minimap.gd) | The round map in the corner |
 | [scripts/region_map.gd](scripts/region_map.gd) | The map of the whole journey (M) |
 | [assets/characters/](assets/characters/) | Bodies, hair, textures and animations (CC0, see `LICENSE.txt` there) |
 | [tools/prepare_characters.py](tools/prepare_characters.py) | Rebuilds `assets/characters/` from the downloaded kit. Only needed if the source kit changes |
+| [tools/make_music.py](tools/make_music.py) | Synthesises the background music into `assets/music/` |
 | `scripts/player.gd`, `enemy.gd`, `npc.gd`, `projectile.gd`, `pickup.gd`, `interactable.gd` | The things in the world |
 
 To add or change content, edit the tables in `data/`. A new stage is one more dictionary in
@@ -229,8 +268,15 @@ What a figure is made of:
   `scripts/retarget.gd` converts the ones the game uses to each body when the first figure is
   built (about a tenth of a second). Walking blends idle, walk, jog and sprint by speed; a
   strike or a sling throw plays on the upper body only, so the legs keep moving.
-- **Weapon.** The equipped melee weapon hangs from the right hand. It is carried in a resting
-  position and turned into the fist for a blow.
+- **Weapons.** Each hand can hold something: a weapon in the fist, a shield strapped to the
+  forearm, or (left hand) a bow. It is carried in a resting position and turned into the fist
+  for a blow. The three blows, the sling and the bow are not clips from the kit: they are made
+  by aiming the arm bones and turning the forearm and wrist so the blade points along the cut
+  (`_blow_keys()`, `_aimed()` and `_grip()`). Left-hand blows are the right-hand ones mirrored.
+- **Clothes from gear.** For the player, what is equipped decides the clothes (the `wear` list
+  of each item in `data/items.gd`): a tunic, a robe, a scale coat, a helmet, a necklace. Cloth
+  and sash colors still come from the character creator; the creator's clothing row is not shown
+  for the player.
 
 To add an appearance choice, append a name to the matching list in `OPTIONS` and handle the new
 index in `build()`, `_dress()` or `_make_piece()`. The creator picks it up by itself. A new
@@ -267,9 +313,13 @@ Character bodies, hair, textures and animations are from Quaternius' Universal B
 and Universal Animation Library (Standard versions), released under CC0 1.0. Details and the
 list of changes are in [assets/characters/LICENSE.txt](assets/characters/LICENSE.txt).
 
+The music (two pieces, in maqam Hijaz and maqam Bayati, for a plucked oud-like string, a ney
+flute, a drone and a frame drum) is synthesised by `tools/make_music.py` and is the project's
+own.
+
 ## Save files
 
-Progress is saved at the start of each stage as `save.json` in Godot's user data folder:
+Progress is saved only when you sleep in your own tent, as `save.json` in Godot's user data folder:
 
 | System | Folder |
 |---|---|
@@ -278,13 +328,16 @@ Progress is saved at the start of each stage as `save.json` in Godot's user data
 | Linux | `~/.local/share/godot/app_userdata/In the Wilderness/` |
 
 Delete the file, or choose "Start a new journey" in the pause menu, to begin again. Runs started
-with `--stage=N` or `--selftest` write to separate files and leave the real save alone.
+with `--stage=N` or `--selftest` write to separate files and leave the real save alone. Saves
+from before the bag had places still load: the gear is laid out in the bag and the chest.
+
+Settings (volume, mouse, field of view, screen) are kept in `settings.cfg` in the same folder.
 
 ## Not done yet
 
-- Sound and music.
-- Clothing is simple: plain colors, no textures or folds. Armor does not show on the figure;
-  only the melee weapon in the hand changes with gear.
+- Sound effects. There is music, but no other sound yet.
+- Clothing is simple: plain colors, no textures or folds.
+- Shields do not block; they add defense.
 - The land is a coarse model, not survey data. Water is a flat sheet. Tents and camp props are
   still simple shapes, and animals are still built from boxes.
 - Balance. Damage, prices and timings are first guesses and have not been tuned by play.

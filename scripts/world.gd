@@ -12,9 +12,14 @@ extends Node3D
 ##   --finish               complete the stage's objectives at once
 ##   --skip=N               complete the first N objectives
 ##   --rich                 start with silver, bronze and a spare dagger
-##   --menu=shop|smith|gear|pause|creator|map   open that menu (--face and --turn=N for the creator)
+##   --menu=shop|trade|smith|gear|chest|lid|settings|pause|creator|map   open that menu
+##                          (--face and --turn=N for the creator; lid: the chest open, no screen)
 ##   --look=sex:1,hair:2    set the player's appearance
-##   --equip=ITEM_ID        equip a piece of gear
+##   --equip=ID,ID          put on gear (--arrows=N adds arrows)
+##   --aim=sling|bow        hold the sling going round, or the bow drawn (screenshots)
+##   --tip=N                point at the Nth thing in the bag to show what it does (screenshots)
+##   --home                 start inside the scout's own tent
+##   --sheathe              start with the weapon put away
 
 const TerrainScript := preload("res://scripts/terrain.gd")
 const PlayerScript := preload("res://scripts/player.gd")
@@ -31,8 +36,13 @@ const RegionScript := preload("res://data/region.gd")
 const CampScript := preload("res://scripts/camp.gd")
 const CloudScript := preload("res://scripts/cloud_pillar.gd")
 const TalkScript := preload("res://data/talk.gd")
+const HomeScript := preload("res://scripts/home.gd")
+const CreatureScript := preload("res://scripts/creature.gd")
+## The inside of the scout's tent stands here, far from the stage and high above it.
+const HOME_AT := Vector3(1500.0, 900.0, 1500.0)
 
 const COMPASS := ["north", "north-east", "east", "south-east", "south", "south-west", "west", "north-west"]
+const CUP := 40.0          # thirst a cup of water quenches
 
 var hud
 var player
@@ -62,6 +72,9 @@ var args := {}
 var _obj_closed := false
 var _failing := false
 var _water_jars
+var home                          # the inside of the scout's own tent (home.gd)
+var water_spots: Array = []       # the barrels and cups about the camp
+var stone_spots: Array = []       # stony patches where sling stones can be picked up
 
 
 func _ready() -> void:
@@ -79,6 +92,7 @@ func _ready() -> void:
 	Game.new_game()
 	if args.has("selftest"):
 		Game.save_path = "user://selftest_save.json"
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(Game.save_path))
 		load_stage()
 		_selftest()
 		return
@@ -101,7 +115,13 @@ func _ready() -> void:
 			Game.look[kv[0]] = int(kv[1])
 		Game.look_changed.emit()
 	if args.has("equip"):
-		Game.equip(Game.add_item(str(args["equip"])))
+		# --equip=bronze_spear,hide_shield  puts these on (debug)
+		for id in str(args["equip"]).split(","):
+			var inst := Game.add_item(id)
+			if not inst.is_empty():
+				Game.equip(inst)
+		if args.has("arrows"):
+			Game.take_ammo("arrows", int(args["arrows"]))
 	if args.has("rich"):
 		Game.silver = 400
 		Game.bronze = 6
@@ -113,6 +133,23 @@ func _ready() -> void:
 			hud.open_smith()
 		"gear":
 			hud.open_inventory()
+		"trade":
+			hud.open_shop()
+		"chest", "lid":
+			# --menu=lid stands at the chest with the lid open, without the chest screen
+			enter_home()
+			Game.place(Game.chest, Game.chest_grid(), Game.new_item("bronze_shield"))
+			Game.place(Game.chest, Game.chest_grid(), Game.new_item("stones", 0, 25))
+			player.global_position = home.chest.global_position + home.chest.global_basis.z * 1.9 + Vector3(0, 0.3, 0)
+			if str(args["menu"]) == "lid":
+				var to: Vector3 = home.chest.global_position - player.global_position
+				player.yaw = atan2(-to.x, -to.z)
+				player.pitch = -0.35
+				home.open_lid(true)
+			else:
+				_open_chest()
+		"settings":
+			hud.open_settings()
 		"pause":
 			hud.open_pause()
 		"map":
@@ -154,9 +191,10 @@ func _build_sky() -> void:
 	sun.rotation_degrees = Vector3(-50.0, -35.0, 0.0)
 	sun.light_energy = 1.1
 	sun.light_color = Color(1.0, 0.96, 0.88)
-	sun.shadow_enabled = true
+	sun.shadow_enabled = bool(Game.settings["shadows"])
 	sun.directional_shadow_max_distance = 140.0
 	add_child(sun)
+	Game.settings_changed.connect(func() -> void: sun.shadow_enabled = bool(Game.settings["shadows"]))
 
 
 # ================================================================ stage setup
@@ -171,8 +209,12 @@ func load_stage() -> void:
 	rng.seed = int(stage["seed"])
 	look_rng.seed = int(stage["seed"]) * 31 + 7
 	Game.begin_stage()
+	# A save made in the tent picks the stage up where it was left. Trying a stage again after
+	# the camp falls goes back to the same point. The game is not saved here: only in the tent.
+	var resume: Dictionary = Game.resume
+	Game.resume = {}
 	snapshot = Game.snapshot()
-	Game.save_game()
+	snapshot["resume"] = resume
 	stage_done = false
 	exit_node = null
 	_failing = false
@@ -201,13 +243,42 @@ func load_stage() -> void:
 	raid.world = self
 	stage_root.add_child(raid)
 	raid.setup(stage["raid"])
-	_next_objective()
+	_scatter_stones()
+
+	if resume.is_empty():
+		_next_objective()
+	else:
+		_resume_stage(resume)
+		return
 
 	# A new journey starts in the character creator; the stage introduction follows it.
 	if Game.look_set:
 		_show_intro()
 	else:
 		hud.open_creator(_show_intro)
+
+
+## Picks a saved stage up again: the objectives already done count as done (their effects on
+## the camp included, without paying again), and the scout wakes in the tent.
+func _resume_stage(resume: Dictionary) -> void:
+	var list: Array = stage["objectives"]
+	var done := clampi(int(resume.get("obj_done", 0)), 0, list.size())
+	for i in done:
+		match str(list[i].get("unlock", "")):
+			"water":
+				Game.camp_has_water = true
+			"workshop":
+				Game.workshop = true
+				if camp.tabernacle == null:
+					camp.raise_tabernacle()
+	_refresh_water_jars()
+	obj_index = done - 1
+	_next_objective()
+	Game.hp = clampf(float(resume.get("hp", Game.max_hp)), 1.0, Game.max_hp)
+	Game.thirst = clampf(float(resume.get("thirst", 100.0)), 0.0, 100.0)
+	Game.water = clampi(int(resume.get("water", Game.max_water)), 0, Game.max_water)
+	enter_home()
+	hud.dialog("Stage %d:  %s" % [Game.stage_index + 1, stage["name"]], "[i]%s  (%s)[/i]\n\nYou wake in your tent.\n\n%s" % [stage["place"], stage["ref"], objective_text()], [["Get up", Callable()]])
 
 
 func _show_intro() -> void:
@@ -339,6 +410,22 @@ func _build_camp() -> void:
 	anvil.global_position = plaza + Vector3(-10.2, 0.3, 2.5)
 	_people()
 
+	# Barrels, and jugs with cups, about the camp.
+	water_spots = []
+	for w in camp.waters:
+		var wp: Vector3 = w["pos"]
+		var spot = _interactable("", ground(wp.x, wp.z) + Vector3(0, 0.6, 0), 2.2, _use_water_spot)
+		spot.set_meta("kind", str(w["kind"]))
+		water_spots.append(spot)
+	_refresh_water_jars()
+
+	# The scout's own tent: its door is in the camp, its inside stands far off.
+	_interactable("Enter your tent", camp.home_door + Vector3(0, 0.5, 0), 2.4, enter_home)
+	home = HomeScript.new()
+	stage_root.add_child(home)
+	home.position = HOME_AT
+	home.build({"sleep": _sleep, "chest": _open_chest, "drink": _home_drink, "leave": leave_home})
+
 
 ## A point on the gathering ground, given relative to its middle.
 func plaza_point(x: float, z: float) -> Vector3:
@@ -413,6 +500,11 @@ func _talk(npc) -> void:
 
 func _refresh_water_jars() -> void:
 	_water_jars.label = "Fill your waterskin" if Game.camp_has_water else "The water jars are empty"
+	for spot in water_spots:
+		if str(spot.get_meta("kind")) == "barrel":
+			spot.label = "Draw water from the barrel" if Game.camp_has_water else "The barrel is empty"
+		else:
+			spot.label = "Drink a cup of water" if Game.camp_has_water else "The jug is empty"
 
 
 func _use_water_jars(_node) -> void:
@@ -421,6 +513,132 @@ func _use_water_jars(_node) -> void:
 		Game.say("You drink deeply and fill your waterskin.")
 	else:
 		Game.say("The jars are dry. The camp needs water.")
+
+
+## A barrel fills the waterskin and quenches thirst; a cup from the jug only quenches it.
+func _use_water_spot(node) -> void:
+	if not Game.camp_has_water:
+		Game.say("There is no water in the camp yet.")
+		return
+	if str(node.get_meta("kind")) == "barrel":
+		Game.refill_water()
+		Game.say("You drink from the dipper and fill your waterskin.")
+	elif Game.thirst >= 99.0:
+		Game.say("You are not thirsty.")
+	else:
+		Game.sip(CUP)
+		Game.say("You drink a cup of water.")
+
+
+# ================================================================ the scout's own tent
+
+## Goes into the tent: the player is moved to its inside, which stands apart from the stage.
+func enter_home(_node = null) -> void:
+	player.indoors = true
+	player.velocity = Vector3.ZERO
+	player.global_position = home.entry()
+	player.yaw = home.entry_yaw()
+	player.body.rotation.y = player.yaw
+	player._arm.spring_length = player.ARM_INDOORS
+
+
+func leave_home(_node = null) -> void:
+	player.indoors = false
+	player.velocity = Vector3.ZERO
+	player.global_position = camp.home_door + Vector3(0, 0.3, 0)
+	player.yaw = camp.home_facing
+	player.body.rotation.y = player.yaw
+	player._arm.spring_length = player.ARM_LENGTH
+
+
+## Sleeping in the tent restores health and breath and saves the game: the only way to save.
+func _sleep(_node = null) -> void:
+	Game.hp = Game.max_hp
+	Game.stamina = Game.max_stamina
+	Game.save_game(checkpoint())
+	hud.dialog("Your tent", "You lie down and sleep until the morning. You wake rested.\n\n[i]Your journey is saved here. If you fall or quit, you can come back to this morning.[/i]", [["Get up", Callable()]])
+
+
+## Where the stage stands now, to be saved with the game.
+func checkpoint() -> Dictionary:
+	return {"obj_done": obj_index, "hp": Game.hp, "thirst": Game.thirst, "water": Game.water}
+
+
+## The lid swings up, the chest is shown beside the bag, and the lid shuts when it is closed.
+func _open_chest(_node = null) -> void:
+	var to: Vector3 = home.chest.global_position - player.global_position
+	player.yaw = atan2(-to.x, -to.z)
+	player.body.rotation.y = player.yaw
+	home.open_lid(true)
+	if not hud.auto:
+		await get_tree().create_timer(0.35).timeout
+	hud.open_chest(func() -> void: home.open_lid(false))
+
+
+func _home_drink(_node = null) -> void:
+	if Game.camp_has_water:
+		Game.refill_water()
+		Game.say("You drink from your jar and fill your waterskin.")
+	else:
+		Game.say("Your jar is dry. The camp needs water.")
+
+
+## Goes back to the last save, made when the scout last slept in the tent.
+func load_checkpoint() -> void:
+	if Game.load_game():
+		load_stage()
+
+
+# ================================================================ sling stones
+
+## Stony patches out in the wilderness where sling stones can be gathered with E. Each holds a
+## few; once emptied it is gone.
+func _scatter_stones() -> void:
+	stone_spots = []
+	var srng := RandomNumberGenerator.new()
+	srng.seed = int(stage["seed"]) * 17 + 3
+	var tries := 0
+	while stone_spots.size() < 30 and tries < 400:
+		tries += 1
+		var ang := srng.randf() * TAU
+		var d := srng.randf_range(camp_radius + 4.0, 185.0)
+		var x := sin(ang) * d
+		var z := cos(ang) * d
+		if terrain.water_y(x, z) > terrain.surface_y(x, z) - 0.2:
+			continue
+		var spot = _interactable("", ground(x, z) + Vector3(0, 0.3, 0), 2.3, _gather_stones)
+		spot.set_meta("left", 3 + srng.randi() % 4)
+		spot.label = "Gather sling stones (%d)" % int(spot.get_meta("left"))
+		for k in 7:
+			var r := srng.randf_range(0.05, 0.11)
+			var pebble := MeshInstance3D.new()
+			var ball := SphereMesh.new()
+			ball.radius = r
+			ball.height = r * 1.4
+			ball.radial_segments = 6
+			ball.rings = 3
+			pebble.mesh = ball
+			pebble.material_override = Game.mat(Color(0.62, 0.58, 0.52).darkened(srng.randf() * 0.25))
+			spot.add_child(pebble)
+			pebble.position = Vector3(srng.randf_range(-0.45, 0.45), -0.27, srng.randf_range(-0.45, 0.45))
+			pebble.rotation.y = srng.randf() * TAU
+		stone_spots.append(spot)
+
+
+func _gather_stones(node) -> void:
+	var left := int(node.get_meta("left"))
+	var n := Game.take_stones(left)
+	if n <= 0:
+		Game.say("Your bag is full.")
+		return
+	left -= n
+	Game.say("+%d sling stones. You carry %d." % [n, Game.stones()])
+	if left <= 0:
+		stone_spots.erase(node)
+		node.queue_free()
+	else:
+		node.set_meta("left", left)
+		node.label = "Gather sling stones (%d)" % left
 
 
 func _palm(pos: Vector3) -> void:
@@ -666,6 +884,7 @@ func new_journey() -> void:
 
 
 func quit_game() -> void:
+	Game.stop_music()
 	get_tree().quit()
 
 
@@ -697,18 +916,20 @@ func _retry() -> void:
 func on_player_died() -> void:
 	var lost := int(Game.silver * 0.25)
 	Game.silver -= lost
-	hud.dialog("You fall", "Others find you and carry you back to the tents. Some of your silver is gone.\n\n[i]You lose %d silver.[/i]" % lost, [["Rise", _respawn]])
+	hud.dialog("You fall", "Others find you and carry you back to your tent. Some of your silver is gone.\n\n[i]You lose %d silver.[/i]" % lost, [["Rise", _respawn]])
 
 
 func _respawn() -> void:
 	Game.hp = Game.max_hp * 0.6
 	Game.thirst = maxf(Game.thirst, 60.0)
-	player.revive(plaza_point(0.0, 10.0) + Vector3(0, 0.5, 0))
+	player.revive(home.bedside())
+	player.indoors = true
+	player._arm.spring_length = player.ARM_INDOORS
 
 
 func get_markers() -> Array:
 	var out: Array = []
-	if not is_instance_valid(player):
+	if not is_instance_valid(player) or player.indoors:
 		return out
 	var gold := Color(1.0, 0.9, 0.55)
 	if player.global_position.distance_to(camp_pos) > camp_radius + 12.0:
@@ -805,12 +1026,35 @@ func _shot() -> void:
 		player.global_position = ground(target.x - away.x, target.z - away.z) + Vector3(0, 0.5, 0)
 		if back > 0.0:
 			player.yaw = atan2(-away.x, -away.z)
+	if args.has("home"):
+		enter_home()
+	if args.has("sheathe"):
+		player.body.sheathe(true)
 	if args.has("yaw"):
 		player.yaw = deg_to_rad(float(args["yaw"]))
+		player.body.rotation.y = player.yaw
 	if args.has("pitch"):
 		player.pitch = deg_to_rad(float(args["pitch"]))
 	if args.has("arm"):
 		player._arm.spring_length = float(args["arm"])     # a long arm gives an overview from above
+	if args.has("aim"):
+		# --aim=sling or --aim=bow: hold the button, so the sling goes round or the bow is drawn
+		if str(args["aim"]) == "bow":
+			Input.action_press("attack")
+			player.draw_bow()
+		else:
+			Input.action_press("sling")
+			player.sling()
+	if args.has("tip"):
+		# --tip=N: point at the Nth thing in the bag, to show what it does
+		await get_tree().process_frame
+		var it: Dictionary = Game.bag[clampi(int(args["tip"]), 0, Game.bag.size() - 1)]
+		var inv = hud.inventory
+		inv._layout()
+		get_viewport().warp_mouse(inv._bag_at + (Vector2(int(it["x"]), int(it["y"])) + Vector2(Game.item_size(it)) * 0.5) * inv.CELL)
+		await get_tree().process_frame
+		inv._update_tip()
+		inv.queue_redraw()
 	for i in int(args.get("frames", "90")):
 		await get_tree().process_frame
 	get_viewport().get_texture().get_image().save_png(str(args["shot"]))
@@ -853,23 +1097,60 @@ func _selftest() -> void:
 	# Gear: buying, equipping, strengthening.
 	check.call(is_equal_approx(Game.melee_power(), 12.0), "the staff starts at 12 damage")
 	check.call(player.body.weapon_kind == "staff", "the player starts with the staff in hand")
+	check.call(Game.stones() == Game.START_STONES and Game.bag.size() == 2, "the scout starts with ten sling stones, five to a place")
+	check.call(player.body.garments.has("top_short") and player.body.garments.has("skirt_short") and player.body.garments.has("sash"), "the scout starts in tunic, kilt and girdle")
 	Game.silver = 1000
 	Game.bronze = 50
 	check.call(Game.try_buy("dagger"), "can buy a dagger")
 	var dagger: Dictionary = Game.bag[Game.bag.size() - 1]
-	Game.equip(dagger)
+	check.call(dagger["id"] == "dagger" and Game.item_size(dagger) == Vector2i(1, 2), "a dagger takes two places in the bag")
+	check.call(Game.equip(dagger), "can equip the dagger")
 	check.call(is_equal_approx(Game.melee_power(), 18.0), "the dagger is equipped")
 	check.call(player.body.weapon_kind == "dagger", "the equipped weapon shows in the hand")
-	check.call(Game.bag.size() == 1 and Game.bag[0]["id"] == "staff", "the staff went back to the bag")
+	var staff_back: Array = Game.bag.filter(func(it): return it["id"] == "staff")
+	check.call(staff_back.size() == 1 and Game.index_in(Game.bag, dagger) < 0, "the staff went back to the bag")
 	check.call(Game.try_upgrade(dagger), "can strengthen the dagger")
 	check.call(is_equal_approx(Game.melee_power(), 18.0 * 1.12), "+1 adds 12 percent")
 	Game.try_upgrade(dagger)
 	check.call(not Game.try_upgrade(dagger), "strengthening stops at +2 before the workshop")
 	var before_sell := Game.silver
-	Game.sell(Game.bag[0])
-	check.call(Game.silver > before_sell and Game.bag.is_empty(), "can sell spare gear")
-	check.call(Game.hurt_player(100.0) < 100.0, "armor blocks some damage")
+	check.call(Game.sell(staff_back[0]) and Game.silver > before_sell, "can sell spare gear")
+	check.call(Game.hurt_player(100.0) < 100.0, "clothes stop some damage")
 	Game.hp = Game.max_hp
+
+	# Both hands, shields, bows, garments and what they give.
+	var short_sword := Game.add_item("short_sword")
+	check.call(Game.equip(short_sword, "hand_l") and player.body.offhand_kind == "sword_short", "a second sword goes in the left hand")
+	check.call(player.blow_hand(0) == "r" and player.blow_hand(1) == "l" and player.blow_hand(2) == "r", "with a blade in each hand the second blow is the left hand's")
+	var defense0 := Game.defense()
+	check.call(Game.equip(Game.add_item("hide_shield")) and Game.equipped["hand_l"]["id"] == "hide_shield" and player.body.offhand_kind == "shield", "a shield goes in the left hand")
+	check.call(is_equal_approx(Game.defense(), defense0 + 7.0) and player.body.offhand.get_parent() == player.body._arm_l, "the shield adds defense and is strapped to the forearm")
+	check.call(Game.equip(Game.add_item("hunting_bow")) and Game.equipped["hand_l"].is_empty() and Game.equipped["hand_r"]["id"] == "hunting_bow", "a bow takes both hands")
+	check.call(player.body.offhand_kind == "bow" and player.body.weapon_kind == "none", "the bow is held in the left hand")
+	check.call(Game.bag.any(func(it): return it["id"] == "dagger") and Game.bag.any(func(it): return it["id"] == "hide_shield"), "what both hands held went back to the bag")
+	Game.bag.clear()    # a dress is two places wide and four high: it needs room
+	check.call(Game.equip(Game.add_item("dress")) and Game.equipped["bottom"].is_empty() and Game.equipped["top"]["id"] == "dress", "a dress takes the place of top and bottom")
+	check.call(player.body.garments.has("skirt_long") and not player.body.garments.has("skirt_short"), "the figure wears the dress")
+	check.call(Game.equip(Game.add_item("bronze_helmet")) and player.body.garments.has("helmet"), "a helmet is worn on the head")
+	var health0 := Game.max_hp
+	check.call(Game.equip(Game.add_item("carnelian_beads")) and is_equal_approx(Game.max_hp, health0 + 8.0) and player.body.garments.has("necklace"), "a carnelian necklace is worn and adds health")
+	check.call(Game.swing_speed(Game.new_item("dagger")) > Game.swing_speed(Game.new_item("short_sword")) and Game.swing_speed(Game.new_item("short_sword")) > Game.swing_speed(Game.new_item("bronze_mace")), "heavier weapons swing slower")
+	var kinds_of_gear := {}
+	for id in Game.Items.ITEMS:
+		kinds_of_gear[str(Game.Items.ITEMS[id]["kind"])] = true
+	check.call(kinds_of_gear.has("spear") and kinds_of_gear.has("bow") and kinds_of_gear.has("shield") and kinds_of_gear.has("axe") and kinds_of_gear.has("mace"), "there are spears, bows, shields, axes and maces")
+	var grid_probe: Array = []
+	check.call(Game.place(grid_probe, Vector2i(2, 4), Game.new_item("staff")) == 0 and Game.place(grid_probe, Vector2i(2, 4), Game.new_item("spear")) == 0 and Game.place(grid_probe, Vector2i(2, 4), Game.new_item("dagger")) == 1, "a full grid takes nothing more")
+	var heap: Array = []
+	check.call(Game.place(heap, Vector2i(2, 1), Game.new_item("stones", 0, 12)) == 2 and Game.ammo_count("stones", heap) == 10, "stones stack five to a place")
+	for slot in Game.equipped:
+		Game.equipped[slot] = {}
+	for pair in [["hand_r", dagger], ["sling", Game.new_item("wool_sling")], ["top", Game.new_item("linen_tunic")], ["bottom", Game.new_item("linen_kilt")], ["belt", Game.new_item("rope_girdle")]]:
+		Game.equipped[pair[0]] = pair[1]
+	Game.bag.clear()
+	Game.take_stones(Game.START_STONES)
+	Game._gear_changed()
+	check.call(player.body.weapon_kind == "dagger" and player.body.offhand == null and player.body.garments.has("skirt_short"), "taking things off shows on the figure")
 
 	# Figures and the character creator.
 	var figures_ok := true
@@ -920,7 +1201,44 @@ func _selftest() -> void:
 	var blade: Vector3 = (hand_idle * robed.weapon.transform.basis).y
 	check.call(blade.z > 0.8 and blade.x < 0.0, "a sword at rest points forward and away from the body")
 	robed.swing()
+	robed.animate(0.1, 0.0)
 	check.call(not robed.weapon.transform.is_equal_approx(robed._carry), "a strike turns the weapon into the fist")
+	robed.sheathe(true)
+	check.call(robed.weapon.get_parent() == robed._hip and robed.sheathed, "a sword is put away at the belt")
+	robed.set_weapon("staff")
+	check.call(robed.weapon.get_parent() == robed._back, "a staff put away goes on the back, and stays there when gear changes")
+	robed.sheathe(false)
+	check.call(robed.weapon.get_parent() == robed.hand_r, "a weapon taken up is back in the hand")
+	robed.whirl()
+	check.call(robed._sling.visible and robed.weapon.get_parent() == robed._back, "the staff goes on the back while the sling is whirled")
+	for i in 50:
+		robed.animate(0.02, 0.0)
+	check.call(not robed._sling.visible and robed.weapon.get_parent() == robed.hand_r, "after the throw the sling is put away and the staff is in hand again")
+	robed.set_hands("sword", "shield")
+	check.call(robed.offhand.get_parent() == robed._arm_l, "a shield is strapped to the left forearm")
+	robed.sheathe(true)
+	check.call(robed.offhand.get_parent() == robed._back and robed.weapon.get_parent() == robed._hip, "put away, the shield goes on the back and the sword at the belt")
+	robed.sheathe(false)
+	# The overhead chop: at the moment it lands the blade points forward and down.
+	var chopper = HumanScript.new()
+	add_child(chopper)
+	chopper.build({"sex": 0})
+	chopper.set_hands("sword", "none")
+	chopper.attack(0, "r", 1.0)
+	for i in 12:
+		chopper.animate(1.0 / 60.0, 0.0)
+		chopper._tree.advance(1.0 / 60.0)
+	var hand_now: Transform3D = chopper.skeleton.global_transform * chopper.skeleton.get_bone_global_pose(chopper.skeleton.find_bone("hand_r"))
+	var cut: Vector3 = (hand_now.basis * chopper._strike.basis.y).normalized()
+	check.call(cut.z < -0.3 and cut.y < 0.2, "blow A brings the blade down in front (%s)" % cut)
+	chopper.queue_free()
+	robed.set_hands("none", "bow")
+	robed.bow_draw()
+	for i in 40:
+		robed.animate(1.0 / 60.0, 0.0)
+		robed._tree.advance(1.0 / 60.0)
+	check.call(robed.drawing and robed._arrow.visible and robed.draw_amount > 0.9, "drawing the bow nocks an arrow and pulls it back")
+	check.call(robed.bow_loose() > 0.9 and not robed.drawing, "and the arrow is let go")
 	robed.die()
 	check.call(robed.dead, "a figure can fall")
 	robed.queue_free()
@@ -930,9 +1248,9 @@ func _selftest() -> void:
 	HumanScript.cycle(probe, "sex", 1)
 	check.call(int(probe["sex"]) == 1 and int(probe["beard"]) == 0, "choosing female clears the beard")
 	Game.look["sex"] = 1
-	Game.look["outfit"] = 1
+	Game.look["cloth"] = 6
 	Game.look_changed.emit()
-	check.call(int(player.body.look["sex"]) == 1 and player.body.garments.has("skirt_long"), "editing the look rebuilds the player figure")
+	check.call(int(player.body.look["sex"]) == 1 and player.body.garments.has("skirt_short"), "editing the look rebuilds the player figure in what is equipped")
 	check.call(player.body.weapon_kind == "dagger", "the weapon stays in hand after a rebuild")
 	Game.look = Game.DEFAULT_LOOK.duplicate()
 	Game.look_changed.emit()
@@ -1085,6 +1403,26 @@ func _selftest() -> void:
 
 	# World content.
 	check.call(get_tree().get_nodes_in_group("enemy").size() == 18, "stage 1 wildlife spawned")
+	var animals := {}
+	for e in get_tree().get_nodes_in_group("enemy"):
+		if e._beast != null:
+			animals[e.kind] = e._beast
+	check.call(animals.has("snake") and animals["snake"]._segments.size() == 16 and animals["snake"]._head != null, "a viper is a modelled body of many pieces with a head")
+	check.call(not animals.has("scorpion") or animals["scorpion"]._legs.size() == 8, "a scorpion has eight legs")
+	var jackal = CreatureScript.new()
+	add_child(jackal)
+	jackal.build("beast", Color(0.6, 0.48, 0.3))
+	var leg0: float = jackal._legs[0]["node"].rotation.x
+	for i in 10:
+		jackal.animate(0.05, 6.0)
+	check.call(jackal._legs.size() == 4 and absf(jackal._legs[0]["node"].rotation.x - leg0) > 0.05, "a running jackal moves its legs")
+	jackal.queue_free()
+	check.call(not Game.has_save(), "starting a stage does not save the game")
+	check.call(camp.waters.size() >= 6 and stone_spots.size() >= 20, "the camp has water stations (%d) and the wilderness has stony ground (%d)" % [camp.waters.size(), stone_spots.size()])
+	var kinds_of_water := {}
+	for w in camp.waters:
+		kinds_of_water[w["kind"]] = true
+	check.call(kinds_of_water.has("barrel") and kinds_of_water.has("cups"), "there are water barrels and jugs with cups")
 	check.call(player.global_position.y > -2.0 and player.global_position.y < 3.0, "the player stands on the ground")
 	check.call(not Game.camp_has_water, "the camp starts stage 1 without water")
 
@@ -1100,7 +1438,7 @@ func _selftest() -> void:
 		if p.kind == "item" and str(p.payload) == "linen":
 			found_item = true
 			p.collect()
-	check.call(found_item and Game.bag.size() == 1, "a forced drop can be picked up")
+	check.call(found_item and Game.bag.any(func(it): return it["id"] == "linen"), "a forced drop can be picked up")
 
 	# Real-time checks: the actual physics, input paths and AI, sped up six times.
 	Engine.time_scale = 6.0
@@ -1137,14 +1475,87 @@ func _selftest() -> void:
 	dummy.global_position = p0 + Vector3(-0.95, 0, 12.0)
 	await _wait(0.3)
 	var dummy_hp: float = dummy.hp
+	var stones0 := Game.stones()
+	Input.action_press("sling")
 	player.sling()
+	await _wait(1.5)
+	check.call(player._slinging and player.body.whirling() and player._aim.visible, "holding the button keeps the sling going round and shows where it will land")
+	check.call(player.aim_on_target, "the landing mark turns red on the enemy in the crosshair")
+	Input.action_release("sling")
 	await _wait(1.2)
+	check.call(not player._slinging and not player._aim.visible, "letting go throws")
 	check.call(is_equal_approx(dummy.hp, dummy_hp - Game.sling_power()), "a sling stone hits what the crosshair is on")
+	check.call(Game.stones() == stones0 - 1, "each throw uses up a stone")
+	Game.remove_ammo(Game.bag, "stones", 999)
+	player.sling()
+	await _wait(0.2)
+	check.call(not player.body.busy(), "with no stones left the sling cannot be thrown")
+	Game.take_stones(stones0)
 	player.yaw = 0.0
 	player.melee()
-	await _wait(0.6)
+	await _wait(0.9)
 	check.call(is_equal_approx(dummy.hp, dummy_hp - Game.sling_power()), "a swing misses an enemy behind and far away")
+
+	# Three presses in a row make the three blows of a combo, each harder than the last.
+	player.yaw = PI
+	dummy.global_position = p0 + Vector3(0, 0, 2.2)
+	await _wait(0.3)
+	dummy_hp = dummy.hp
+	player.melee()
+	await _wait(0.1)
+	player.melee()
+	await _wait(0.3)
+	check.call(player.combo == 1, "pressing again during the first blow leads into the second")
+	player.melee()
+	await _wait(1.0)
+	var combo_damage: float = Game.melee_power() * (PlayerScript.BLOW_POWER[0] + PlayerScript.BLOW_POWER[1] + PlayerScript.BLOW_POWER[2])
+	check.call(is_equal_approx(dummy.hp, dummy_hp - combo_damage), "a full combo lands all three blows (%.1f of %.1f)" % [dummy_hp - dummy.hp, combo_damage])
+	check.call(player.combo == -1, "the combo ends after the third blow")
+
+	# Putting the weapon away, and drawing it to strike.
+	player.toggle_sheathe()
+	await _wait(0.6)
+	check.call(player.body.sheathed and player.body.weapon.get_parent() == player.body._hip, "R puts the dagger away at the belt")
+	dummy_hp = dummy.hp
+	player.melee()
+	await _wait(1.0)
+	check.call(not player.body.sheathed and dummy.hp < dummy_hp, "attacking with the weapon put away draws it and strikes")
+
+	# The bow: hold to draw, let go to loose; each arrow is used up.
+	var bow_inst := Game.add_item("hunting_bow")
+	Game.equip(bow_inst)
+	Game.take_ammo("arrows", 20)
+	dummy.global_position = p0 + Vector3(-0.95, 0, 12.0)
+	await _wait(0.3)
+	dummy_hp = dummy.hp
+	Input.action_press("attack")
+	player.draw_bow()
+	await _wait(1.0)
+	check.call(player.body.drawing and player.body.draw_amount > 0.95 and player._aim.visible, "holding attack with a bow draws it fully")
+	Input.action_release("attack")
+	await _wait(0.8)
+	check.call(is_equal_approx(dummy.hp, dummy_hp - Game.bow_power()) and Game.arrows() == 19, "a fully drawn arrow hits for the bow's damage (%.1f)" % (dummy_hp - dummy.hp))
+	Game.equip(Game.bag.filter(func(it): return it["id"] == "dagger")[0])
+	Game.remove_ammo(Game.bag, "arrows", 999)
+	Game.remove_from(Game.bag, bow_inst)
 	dummy.take_damage(1e9)
+
+	# Stamina: sprinting spends it, walking wins it back.
+	player.global_position = ground(0.0, camp_radius + 30.0) + Vector3(0, 0.3, 0)
+	player.yaw = PI
+	Game.thirst = 80.0
+	Game.stamina = Game.max_stamina
+	Input.action_press("move_forward")
+	Input.action_press("sprint")
+	await _wait(2.0)
+	check.call(Game.stamina < Game.max_stamina - 20.0, "sprinting uses up stamina (%.0f)" % Game.stamina)
+	await _wait(4.0)
+	check.call(player._tired and not player._sprinting, "out of stamina, the scout cannot sprint")
+	Input.action_release("sprint")
+	var breath := Game.stamina
+	await _wait(2.0)
+	check.call(Game.stamina > breath + 5.0, "walking slowly brings stamina back (%.0f -> %.0f)" % [breath, Game.stamina])
+	Input.action_release("move_forward")
 
 	var p1: Vector3 = ground(0.0, camp_radius + 30.0) + Vector3(0, 0.3, 0)   # outside the camp, so no resting
 	player.global_position = p1
@@ -1164,9 +1575,118 @@ func _selftest() -> void:
 	Game.hp = 0.5
 	await _wait(3.0)
 	check.call(not player.dead and Game.hp >= Game.max_hp * 0.5, "a fallen player is revived")
-	check.call(player.global_position.distance_to(camp_pos) < 15.0, "the revived player is back in the camp")
+	check.call(player.indoors and player.global_position.distance_to(home.bedside()) < 2.0, "the revived player wakes in their own tent")
+	leave_home()
+	check.call(not player.indoors and player.global_position.distance_to(camp.home_door) < 2.0, "leaving the tent comes out at its door in the camp")
 	if is_instance_valid(viper):
 		viper.take_damage(1e9)
+
+	# Water about the camp: none until Marah is found, then barrels fill the skin and cups quench.
+	var cups = null
+	var barrel = null
+	for spot in water_spots:
+		if str(spot.get_meta("kind")) == "cups":
+			cups = spot
+		else:
+			barrel = spot
+	Game.thirst = 30.0
+	cups.interact()
+	check.call(is_equal_approx(Game.thirst, 30.0) and cups.prompt_text() == "The jug is empty", "with no water in the camp the jugs are empty")
+	Game.camp_has_water = true
+	_refresh_water_jars()
+	cups.interact()
+	check.call(is_equal_approx(Game.thirst, 30.0 + CUP), "a cup of water quenches thirst")
+	Game.water = 0
+	barrel.interact()
+	check.call(Game.water == Game.max_water and is_equal_approx(Game.thirst, 100.0), "a water barrel fills the waterskin")
+	Game.camp_has_water = false
+	_refresh_water_jars()
+
+	# The bag: a grid of places; stones stack five to a place; a bigger bag has more places.
+	var keep_bag: Array = Game.bag.duplicate()
+	Game.bag.clear()
+	check.call(Game.take_stones(500) == Game.places() * 5 and not Game.can_take("stones"), "stones fill the bag, five to a place (%d)" % Game.stones())
+	Game.silver = 1000
+	check.call(not Game.try_buy("dagger") and not Game.try_buy_stones(), "a full bag takes nothing more")
+	stone_spots[0].interact()
+	check.call(Game.stones() == Game.places() * 5, "stony ground cannot overfill the bag")
+	check.call(Game.try_buy_pack("shoulder_bag") and Game.places() == 40 and Game.bag_grid() == Vector2i(8, 5), "a shoulder bag has more places")
+	Game.bag.clear()
+	var patch = stone_spots[0]
+	var in_patch := int(patch.get_meta("left"))
+	patch.interact()
+	check.call(Game.stones() == in_patch, "gathering at stony ground picks up its stones (%d)" % in_patch)
+	var loot := Game.add_item("linen")
+	Game.take_stones(500)
+	var drop = spawn_pickup("item", "leather", player.global_position + Vector3(0.5, 0, 0))
+	await _wait(0.3)
+	check.call(is_instance_valid(drop) and not Game.bag.any(func(it): return it["id"] == "leather"), "gear on the ground is left there when the bag is full")
+	Game.remove_ammo(Game.bag, "stones", 999)
+	await _wait(0.3)
+	check.call(not is_instance_valid(drop) and Game.bag.any(func(it): return it["id"] == "leather"), "and picked up once there is room")
+
+	# The tent: the chest keeps things, and sleeping is the one way to save.
+	enter_home()
+	check.call(player.indoors and player.global_position.distance_to(HOME_AT) < 6.0, "going into the tent leads inside it")
+	await _wait(0.3)
+	check.call(player.global_position.y > HOME_AT.y - 1.0, "inside the tent the scout stands on its floor")
+	Game.take_stones(12)
+	var heap_in_bag: Dictionary = Game.bag.filter(func(it): return it["id"] == "stones")[0]
+	var heap_count := int(heap_in_bag["count"])
+	check.call(Game.store(loot) and Game.store(heap_in_bag), "gear and stones can be put in the chest")
+	check.call(Game.index_in(Game.chest, loot) >= 0 and Game.index_in(Game.bag, loot) < 0 and Game.ammo_count("stones", Game.chest) == heap_count, "and they are in it")
+	check.call(Game.unstore(loot) and Game.index_in(Game.bag, loot) >= 0, "and taken out again")
+	Game.store(loot)
+	# The chest screen: the lid opens, the bag is on the left and the chest on the right.
+	hud.auto = false
+	_open_chest()
+	await _wait(0.6)
+	var screen = hud.inventory
+	check.call(screen.visible and screen.mode == "chest" and get_tree().paused, "using the chest opens it beside the bag")
+	await get_tree().create_timer(0.5).timeout
+	check.call(home.lid_hinge.rotation.x < -1.5, "the lid of the chest swings open (%.2f)" % home.lid_hinge.rotation.x)
+	screen._layout()
+	var in_chest: Dictionary = Game.chest[Game.index_in(Game.chest, loot)]
+	var spot_px: Vector2 = screen._right_at + (Vector2(int(in_chest["x"]), int(in_chest["y"])) + Vector2(0.5, 0.5)) * screen.CELL
+	screen.quick(spot_px)
+	check.call(Game.index_in(Game.bag, loot) >= 0, "right-clicking in the chest takes it into the bag")
+	screen.close()
+	check.call(not get_tree().paused and not screen.visible, "closing the chest goes back to the game")
+	await get_tree().create_timer(0.5).timeout
+	check.call(absf(home.lid_hinge.rotation.x) < 0.05, "and the lid shuts")
+	Game.store(loot)
+	# The gear screen: pick something up and drop it on a slot to wear it.
+	var cap := Game.add_item("leather_cap")
+	hud.open_inventory()
+	screen._layout()
+	screen.click(screen._bag_at + (Vector2(int(cap["x"]), int(cap["y"])) + Vector2(1.0, 1.0)) * screen.CELL)
+	check.call(is_same(screen.held, cap), "clicking an item in the bag picks it up")
+	screen.click(screen._slot_rect("head").get_center())
+	check.call(screen.held.is_empty() and is_same(Game.equipped["head"], cap) and player.body.garments.has("cap"), "dropping it on the head slot wears it")
+	check.call(screen.describe(cap).contains("Defense"), "hovering shows what it does")
+	screen.quick(screen._slot_rect("head").get_center())
+	check.call(Game.equipped["head"].is_empty() and Game.index_in(Game.bag, cap) >= 0, "right-clicking a slot takes it off into the bag")
+	screen.close()
+	Game.remove_from(Game.bag, cap)
+	hud.auto = true
+	Game.hp = 10.0
+	_sleep()
+	check.call(Game.has_save() and is_equal_approx(Game.hp, Game.max_hp), "sleeping in the tent heals and saves the game")
+	var slept_at := obj_index
+	Game.bag = keep_bag
+	Game.chest.clear()
+	leave_home()
+
+	# Waking where the game was saved.
+	_finish_current_objective()
+	Game.load_game()
+	load_stage()
+	check.call(obj_index == slept_at and player.indoors, "loading the save wakes the scout in the tent at the same point of the stage")
+	check.call(Game.chest.size() == 2 and Game.ammo_count("stones", Game.chest) == heap_count and Game.pack == "shoulder_bag", "the chest and the bag are kept in the save")
+	Game.chest.clear()
+	Game.bag = keep_bag
+	Game.pack = "pouch"
+	leave_home()
 
 	player.global_position = Vector3(-8.5, 0.2, -1.8)
 	await _wait(0.3)
@@ -1310,6 +1830,25 @@ func _selftest() -> void:
 	check.call(not Game.look_set and int(Game.look["hair"]) == 0, "a new journey resets the look")
 	check.call(Game.load_game() and Game.stage_index == 2 and Game.silver == 77, "save and load round-trip")
 	check.call(Game.look_set and int(Game.look["hair"]) == 3 and int(Game.look["sex"]) == 1, "the look is saved with the game")
+
+	# A save from before the bag had places still loads: old slots, counted stones.
+	Game.restore({"stage_index": 1, "silver": 40, "equipped": {"melee": {"id": "dagger", "plus": 1}, "sling": {"id": "braided_sling", "plus": 0},
+		"armor": {"id": "cloak", "plus": 0}}, "bag": [{"id": "leather", "plus": 0}, {"id": "staff", "plus": 0}], "stones": 7, "chest": [{"id": "linen", "plus": 1}], "chest_stones": 3})
+	check.call(Game.equipped["hand_r"]["id"] == "dagger" and int(Game.equipped["hand_r"]["plus"]) == 1 and Game.equipped["sling"]["id"] == "braided_sling", "an old save keeps its weapon and sling")
+	check.call(Game.equipped["top"]["id"] == "linen_tunic" and Game.equipped["bottom"]["id"] == "linen_kilt", "an old save's travel cloak becomes tunic and kilt")
+	check.call(Game.stones() == 7 and Game.ammo_count("stones", Game.chest) == 3 and Game.bag.any(func(it): return it["id"] == "leather") and Game.chest.size() == 2, "an old save's stones and gear are laid out in the bag and the chest")
+	Game.new_game()
+
+	# Settings, music and the bars in the corner.
+	Game.settings["music"] = 0.3
+	Game.apply_settings()
+	check.call(absf(AudioServer.get_bus_volume_db(AudioServer.get_bus_index("Music")) - linear_to_db(0.3)) < 0.01, "the music volume setting turns the music down")
+	Game.settings["music"] = Game.DEFAULT_SETTINGS["music"]
+	Game.apply_settings()
+	check.call(ResourceLoader.exists(Game.MUSIC[0]) and ResourceLoader.exists(Game.MUSIC[1]), "the background music is there")
+	hud._stats.text = "Water 3/3    Silver 77    Bronze 0    Facing a very long way round to the south-south-west"
+	await get_tree().process_frame
+	check.call(hud._hp.size.x < 280.0 and hud._stamina.size.x < 280.0, "the bars keep their width whatever the text beside them says (%.0f)" % hud._hp.size.x)
 
 	print("SELFTEST %s  (%d failed)" % ["OK" if fails.is_empty() else "FAILED", fails.size()])
 	get_tree().quit(0 if fails.is_empty() else 1)

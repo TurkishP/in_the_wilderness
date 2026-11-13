@@ -7,6 +7,7 @@ extends CanvasLayer
 const HumanScript := preload("res://scripts/human.gd")
 const MinimapScript := preload("res://scripts/minimap.gd")
 const RegionMapScript := preload("res://scripts/region_map.gd")
+const InventoryScript := preload("res://scripts/inventory_ui.gd")
 
 var world
 var auto := false         # test mode: a dialog picks its first option at once and never shows
@@ -16,6 +17,8 @@ var minimap: Control       # the round map in the top-right corner
 
 var _hp: ProgressBar
 var _thirst: ProgressBar
+var _stamina: ProgressBar
+var _stones: Label
 var _camp: ProgressBar
 var _camp_label: Label
 var _stats: Label
@@ -45,6 +48,10 @@ var _creator_buttons := {}
 var _creator_view_button: Button
 var _creator_done := Callable()
 var _creator_face := false
+var inventory               # the bag, gear, chest and trader screens (inventory_ui.gd)
+var _left: VBoxContainer     # the bars and counts in the top-left corner
+var _settings: PanelContainer
+var _setting_rows := {}
 
 
 func _ready() -> void:
@@ -69,6 +76,7 @@ func _ready() -> void:
 	root.add_child(_markers)
 
 	var left := VBoxContainer.new()
+	_left = left
 	left.position = Vector2(24, 20)
 	left.add_theme_constant_override("separation", 4)
 	left.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -79,6 +87,11 @@ func _ready() -> void:
 	left.add_child(_text("Thirst", 15))
 	_thirst = _bar(Color(0.22, 0.56, 0.86))
 	left.add_child(_thirst)
+	left.add_child(_text("Stamina", 15))
+	_stamina = _bar(Color(0.86, 0.74, 0.22))
+	left.add_child(_stamina)
+	_stones = _text("", 18)
+	left.add_child(_stones)
 	_stats = _text("", 17)
 	left.add_child(_stats)
 	_camp_label = _text("Camp under attack", 15, Color(1.0, 0.6, 0.5))
@@ -159,6 +172,9 @@ func _ready() -> void:
 	root.add_child(_panel)
 	_build_creator(root)
 	_build_map(root)
+	_build_settings(root)
+	inventory = InventoryScript.new()
+	root.add_child(inventory)
 
 
 func _anchor(c: Control, l: float, r: float, t: float, b: float, ol: float, o_r: float, ot: float, ob: float) -> void:
@@ -186,6 +202,8 @@ func _text(text: String, size: int, color: Color = Color.WHITE) -> Label:
 func _bar(color: Color) -> ProgressBar:
 	var b := ProgressBar.new()
 	b.custom_minimum_size = Vector2(270, 16)
+	# Keep the bar its own width: the text lines in the same column change length as you turn.
+	b.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	b.show_percentage = false
 	b.max_value = 100.0
 	var fill := StyleBoxFlat.new()
@@ -205,10 +223,22 @@ func _bar(color: Color) -> ProgressBar:
 func _process(delta: float) -> void:
 	_hp.value = Game.hp / Game.max_hp * 100.0
 	_thirst.value = Game.thirst
+	_stamina.value = Game.stamina / Game.max_stamina * 100.0
+	var ammo := "Stones %d" % Game.stones()
+	if not Game.bow().is_empty() or Game.arrows() > 0:
+		ammo += "    Arrows %d" % Game.arrows()
+	_stones.text = "%s        Bag %d/%d" % [ammo, Game.used_places(), Game.places()]
+	var short := Game.stones() == 0 or (not Game.bow().is_empty() and Game.arrows() == 0)
+	_stones.add_theme_color_override("font_color", Color(1.0, 0.55, 0.45) if short or Game.used_places() >= Game.places() else Color.WHITE)
 	_hurt.color.a = move_toward(_hurt.color.a, 0.0, delta * 1.2)
+	_left.visible = not inventory.visible
+	_quests.visible = not inventory.visible
 	_prompt.text = "" if Game.ui_open else Game.prompt
 	if world == null or world.stage.is_empty():
 		return
+	var inside: bool = is_instance_valid(world.player) and world.player.indoors
+	minimap.visible = not inside
+	_coords.visible = not inside
 	var facing := ""
 	if is_instance_valid(world.player):
 		var f: Vector3 = world.player.forward()
@@ -342,7 +372,15 @@ func _input(event: InputEvent) -> void:
 	if not (event is InputEventKey) or not event.pressed or event.echo:
 		return
 	var key: int = event.physical_keycode
-	if _map_panel.visible:
+	if inventory.visible:
+		get_viewport().set_input_as_handled()
+		if key == KEY_ESCAPE or key == KEY_I or key == KEY_TAB or (key == KEY_E and inventory.mode == "chest"):
+			inventory.close()
+	elif _settings.visible:
+		get_viewport().set_input_as_handled()
+		if key == KEY_ESCAPE:
+			_close_settings()
+	elif _map_panel.visible:
 		get_viewport().set_input_as_handled()
 		if key == KEY_M or key == KEY_ESCAPE or key == KEY_ENTER:
 			close_map()
@@ -360,7 +398,7 @@ func _input(event: InputEvent) -> void:
 			_choose(_cbs.size() - 1)
 		elif (key == KEY_ENTER or key == KEY_SPACE or key == KEY_E) and _cbs.size() == 1:
 			_choose(0)
-	elif key == KEY_TAB:
+	elif key == KEY_I or key == KEY_TAB:
 		open_inventory()
 	elif key == KEY_M:
 		open_map()
@@ -371,12 +409,22 @@ func _input(event: InputEvent) -> void:
 # ---------------------------------------------------------------- menus
 
 func open_pause() -> void:
-	var text := "[b]Controls[/b]\nW A S D  move        Shift  sprint        Space  jump\nLeft mouse  strike        Right mouse  sling a stone at the crosshair\nE  talk or use        Q  drink        Tab  gear        M  map        Esc  this menu\n\nThirst falls as you travel and faster when you run. Rest inside the camp to heal.\nRaiders go for the camp. If the camp falls, the stage starts again."
-	dialog("Paused", text, [
-		["Change how you look", open_creator],
+	var text := "[b]Controls[/b]\nW A S D  move        Shift  sprint        Space  jump\nLeft mouse  strike (press again for the next blow, up to three); with a bow, hold to draw and release to shoot\nRight mouse  hold to whirl the sling, release to throw; the ring shows where it will land\nR  put your weapons away or take them up        E  talk or use        Q  drink        I  inventory        M  map        Esc  this menu\n\nThirst falls as you travel and faster when you run. Sprinting tires you; walk to get your breath back. Rest inside the camp to heal.\nEach sling stone and arrow is used up when shot. Gather stones from stony ground, or buy them from the trader.\nHeavier weapons swing more slowly. The game is saved only when you sleep in your own tent.\nRaiders go for the camp. If the camp falls, the stage starts again."
+	var options: Array = [["Settings", open_settings], ["Change how you look", open_creator]]
+	if Game.has_save():
+		options.append(["Go back to where you last slept", _confirm_load])
+	options.append_array([
 		["Start a new journey", _confirm_new],
 		["Quit the game", world.quit_game],
 		["Resume", Callable()],
+	])
+	dialog("Paused", text, options)
+
+
+func _confirm_load() -> void:
+	dialog("Go back to your last save?", "Everything since you last slept in your tent will be lost.", [
+		["Yes, wake in my tent", world.load_checkpoint],
+		["No, keep going", Callable()],
 	])
 
 
@@ -388,75 +436,53 @@ func _confirm_new() -> void:
 
 
 func open_inventory() -> void:
-	var t := "Silver %d    Bronze %d    Health %d/%d\n\n[b]Equipped[/b]\n" % [Game.silver, Game.bronze, int(Game.hp), int(Game.max_hp)]
-	for slot in Game.SLOTS:
-		var inst: Dictionary = Game.equipped[slot]
-		t += "%s:  %s  (%s)\n" % [str(slot).capitalize(), Game.item_name(inst), Game.item_desc(inst)]
-	var options: Array = []
-	if Game.bag.is_empty():
-		t += "\nYour bag is empty."
-	else:
-		t += "\n[b]In your bag[/b] (%d)" % Game.bag.size()
-		for inst in Game.bag.slice(0, 9):
-			options.append(["Equip %s  (%s)" % [Game.item_name(inst), Game.item_desc(inst)], _equip.bind(inst)])
-	options.append(["Close", Callable()])
-	dialog("Your gear", t, options)
+	if auto or inventory.visible:
+		return
+	_panel.visible = false
+	_cbs.clear()
+	inventory.open("gear", 1, _inventory_closed)
+	_set_open(true)
 
 
-func _equip(inst: Dictionary) -> void:
-	Game.equip(inst)
-	open_inventory()
-
-
+## The trader's goods beside the bag: click to buy, right-click your own things to sell.
 func open_shop() -> void:
-	var options: Array = []
-	for id in Game.shop_stock(int(world.stage["tier"])):
-		var d: Dictionary = Game.Items.ITEMS[id]
-		var price: int = int(d["price"])
-		var desc := Game.power_text(str(d["slot"]), float(d["power"]))
-		options.append(["Buy %s  (%s)  for %d silver" % [d["name"], desc, price], _buy.bind(id), Game.silver >= price])
-	if Game.max_water < 6:
-		var wp := Game.waterskin_price()
-		options.append(["Buy a larger waterskin  (+1 drink)  for %d silver" % wp, _buy_waterskin, Game.silver >= wp])
-	if not Game.bag.is_empty():
-		options.append(["Sell spare gear", open_sell])
-	options.append(["Leave", Callable()])
-	dialog("Caravan trader", "\"Bronze, leather and slings. Fair weights and fair prices.\"\n\nYou have %d silver." % Game.silver, options)
+	last_dialog = "\"Bronze, leather and slings. Fair weights and fair prices.\"  You have %d silver." % Game.silver
+	if auto:
+		return
+	_panel.visible = false
+	_cbs.clear()
+	inventory.open("trade", int(world.stage["tier"]), _inventory_closed)
+	_set_open(true)
 
 
-func _buy(id: String) -> void:
-	if Game.try_buy(id):
-		Game.say("Bought: %s. Press Tab to equip it." % Game.Items.ITEMS[id]["name"])
-	open_shop()
+## The chest in the scout's own tent, beside the bag: what is left here stays for the whole
+## journey. `on_close` runs when it is shut.
+func open_chest(on_close: Callable = Callable()) -> void:
+	if auto:
+		if on_close.is_valid():
+			on_close.call()
+		return
+	_panel.visible = false
+	_cbs.clear()
+	inventory.open("chest", 1, func() -> void:
+		_inventory_closed()
+		if on_close.is_valid():
+			on_close.call())
+	_set_open(true)
 
 
-func _buy_waterskin() -> void:
-	if Game.try_buy_waterskin():
-		Game.say("Your waterskin now holds %d drinks." % Game.max_water)
-	open_shop()
-
-
-func open_sell() -> void:
-	var options: Array = []
-	for inst in Game.bag.slice(0, 9):
-		options.append(["Sell %s for %d silver" % [Game.item_name(inst), Game.sell_value(inst)], _sell.bind(inst)])
-	options.append(["Back", open_shop])
-	dialog("Caravan trader", "\"Show me what you have.\"\n\nYou have %d silver." % Game.silver, options)
-
-
-func _sell(inst: Dictionary) -> void:
-	Game.sell(inst)
-	if Game.bag.is_empty():
-		open_shop()
-	else:
-		open_sell()
+func _inventory_closed() -> void:
+	_set_open(false)
+	Game.block_input()
 
 
 func open_smith() -> void:
 	var cap := Game.max_plus()
 	var options: Array = []
-	for slot in Game.SLOTS:
+	for slot in Game.Items.EQUIP_SLOTS:
 		var inst: Dictionary = Game.equipped[slot]
+		if not Game.can_strengthen(inst):
+			continue
 		if int(inst["plus"]) >= cap:
 			options.append(["%s cannot be made stronger here" % Game.item_name(inst), Callable(), false])
 			continue
@@ -488,6 +514,8 @@ func _build_creator(root: Control) -> void:
 	v.add_child(_text("Your scout", 26, Color(1.0, 0.85, 0.5)))
 	v.add_child(_text("Choose how you look. You can change it later from the pause menu.", 15))
 	for key in HumanScript.ORDER:
+		if key == "outfit":
+			continue    # the scout's clothes are what is equipped (inventory)
 		var row := HBoxContainer.new()
 		row.add_theme_constant_override("separation", 8)
 		var name_label := _text(str(HumanScript.LABELS[key]), 18)
@@ -548,7 +576,6 @@ func close_creator() -> void:
 		return
 	_creator.visible = false
 	Game.look_set = true
-	Game.save_game()
 	world.player.set_creator_view("")
 	_set_open(false)
 	Game.block_input()
@@ -560,7 +587,7 @@ func close_creator() -> void:
 
 func _refresh_creator() -> void:
 	var female: bool = int(Game.look.get("sex", 0)) == 1
-	for key in HumanScript.ORDER:
+	for key in _creator_values:
 		var value: Label = _creator_values[key]
 		value.text = HumanScript.value_name(key, Game.look)
 		var locked: bool = key == "beard" and female
@@ -636,3 +663,108 @@ func close_map() -> void:
 	_map_panel.visible = false
 	_set_open(false)
 	Game.block_input()
+
+
+# ---------------------------------------------------------------- settings
+
+var _syncing := false
+
+
+func _build_settings(root: Control) -> void:
+	_settings = PanelContainer.new()
+	_anchor(_settings, 0.5, 0.5, 0.5, 0.5, 0, 0, 0, 0)
+	_settings.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	_settings.grow_vertical = Control.GROW_DIRECTION_BOTH
+	_settings.add_theme_stylebox_override("panel", _panel_style)
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 12)
+	_settings.add_child(v)
+	v.add_child(_text("Settings", 26, Color(1.0, 0.85, 0.5)))
+	for row in [["master", "Master volume", 0.0, 1.0, 0.05], ["music", "Music volume", 0.0, 1.0, 0.05],
+			["sensitivity", "Mouse sensitivity", 0.3, 2.5, 0.05], ["fov", "Field of view", 55.0, 100.0, 1.0]]:
+		var h := HBoxContainer.new()
+		h.add_theme_constant_override("separation", 14)
+		var l := _text(str(row[1]), 18)
+		l.custom_minimum_size.x = 210
+		h.add_child(l)
+		var slider := HSlider.new()
+		slider.min_value = float(row[2])
+		slider.max_value = float(row[3])
+		slider.step = float(row[4])
+		slider.custom_minimum_size = Vector2(320, 26)
+		slider.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		slider.focus_mode = Control.FOCUS_NONE
+		h.add_child(slider)
+		var shown := _text("", 18, Color(1.0, 0.95, 0.75))
+		shown.custom_minimum_size.x = 70
+		h.add_child(shown)
+		slider.value_changed.connect(_on_setting.bind(str(row[0])))
+		_setting_rows[row[0]] = [slider, shown]
+		v.add_child(h)
+	for row in [["invert_y", "Invert mouse up and down"], ["fullscreen", "Full screen"], ["vsync", "V-Sync"], ["shadows", "Shadows"]]:
+		var box := CheckBox.new()
+		box.text = str(row[1])
+		box.add_theme_font_size_override("font_size", 18)
+		box.focus_mode = Control.FOCUS_NONE
+		box.toggled.connect(_on_setting.bind(str(row[0])))
+		_setting_rows[row[0]] = [box, null]
+		v.add_child(box)
+	var bottom := HBoxContainer.new()
+	bottom.add_theme_constant_override("separation", 10)
+	bottom.add_child(_small_button("Defaults", _settings_defaults, 110))
+	bottom.add_child(_small_button("Back  (Esc)", _close_settings, 130))
+	v.add_child(bottom)
+	_settings.visible = false
+	root.add_child(_settings)
+
+
+## The settings page, from the pause menu. Changes take effect at once and are kept.
+func open_settings() -> void:
+	if auto:
+		return
+	_panel.visible = false
+	_cbs.clear()
+	_sync_settings()
+	_settings.visible = true
+	_set_open(true)
+
+
+func _close_settings() -> void:
+	_settings.visible = false
+	open_pause()
+
+
+func _on_setting(value: Variant, key: String) -> void:
+	if _syncing:
+		return
+	Game.set_setting(key, value)
+	_sync_settings()
+
+
+func _settings_defaults() -> void:
+	for key in Game.DEFAULT_SETTINGS:
+		Game.settings[key] = Game.DEFAULT_SETTINGS[key]
+	Game.apply_settings()
+	Game.save_settings()
+	_sync_settings()
+
+
+## Shows the current values on the sliders and boxes.
+func _sync_settings() -> void:
+	_syncing = true
+	for key in _setting_rows:
+		var row: Array = _setting_rows[key]
+		var value: Variant = Game.settings[key]
+		if row[0] is CheckBox:
+			(row[0] as CheckBox).button_pressed = bool(value)
+		else:
+			(row[0] as HSlider).value = float(value)
+			var shown: Label = row[1]
+			match key:
+				"master", "music":
+					shown.text = "%d%%" % int(round(float(value) * 100.0))
+				"sensitivity":
+					shown.text = "%.2fx" % float(value)
+				"fov":
+					shown.text = "%d°" % int(value)
+	_syncing = false
