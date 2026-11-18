@@ -84,6 +84,12 @@ func _draw() -> void:
 				draw_rect(Rect2(p + Vector2(-0.9, 1.6), Vector2(1.8, 1.6)), Color(0.2, 0.15, 0.0))
 			"item":
 				draw_circle(p, 2.6, Color(1.0, 0.95, 0.55))
+			"place":
+				draw_arc(p, 5.0, 0.0, TAU, 16, Color(0.75, 0.9, 1.0), 2.0)
+				draw_circle(p, 1.8, Color(0.75, 0.9, 1.0))
+			"trader":
+				draw_rect(Rect2(p - Vector2(5, 5), Vector2(10, 10)), Color(0.95, 0.75, 0.3))
+				draw_rect(Rect2(p - Vector2(5, 5), Vector2(10, 10)), Color(0.25, 0.15, 0.05), false, 1.5)
 
 	# The player: an arrow pointing the way the camera faces.
 	var f: Vector3 = world.player.forward()

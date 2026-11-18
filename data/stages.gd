@@ -18,7 +18,8 @@ extends RefCounted
 ##       reach   {text, label, dist, site}   any objective may give "bearing" (degrees from north)
 ##               to fix which way it lies; otherwise the direction is random
 ##       collect {text, label, item, count, dist, spread, color, guards}
-##       boss    {text, boss | names, dist, scale, drop, guards}
+##       boss    {text, boss | names, dist, scale, drop, guards}   drop: what the boss leaves for
+##               certain (with several names, the last of them to fall)
 ##       defend  {text, count}
 ##       rescue  {text, label, count, dist, guards}
 ##   quests      three side quests: gather, lost, investigate
@@ -65,7 +66,7 @@ const LIST := [
 		"objectives": [
 			{"type": "collect", "text": "Gather manna", "label": "Manna", "item": "Manna", "count": 8, "dist": 90.0, "spread": 22.0, "color": Color(0.97, 0.95, 0.88),
 				"done": "Each family gathers what it needs, an omer a head. What is kept until morning breeds worms, so no one stores it. Only on the sixth day does a double portion keep for the Sabbath."},
-			{"type": "boss", "text": "Break the Amalekite attack", "boss": "Amalekite chief", "dist": 130.0, "guards": {"raider": 3},
+			{"type": "boss", "text": "Break the Amalekite attack", "boss": "Amalekite chief", "dist": 130.0, "drop": "chieftains_blade", "guards": {"raider": 3},
 				"done": "Joshua fights in the valley while Moses stands on the hill with the staff of God. When his hands are raised, Israel prevails. Aaron and Hur hold them steady until sunset, and Amalek is overcome."},
 		],
 		"quests": [
@@ -273,7 +274,7 @@ const LIST := [
 		"wild": {"snake": 8, "scorpion": 8, "jackal": 10},
 		"raid": {"kind": "raider", "label": "Midianite raiders", "size": 6, "interval": [60.0, 90.0], "slingers": true},
 		"objectives": [
-			{"type": "boss", "text": "Defeat the five kings of Midian", "names": ["Evi", "Rekem", "Zur", "Hur", "Reba"], "dist": 150.0, "hp_mult": 0.5, "guards": {"raider": 3, "slinger": 2},
+			{"type": "boss", "text": "Defeat the five kings of Midian", "names": ["Evi", "Rekem", "Zur", "Hur", "Reba"], "dist": 150.0, "hp_mult": 0.5, "drop": "kings_khopesh", "guards": {"raider": 3, "slinger": 2},
 				"done": "The five kings of Midian fall: Evi, Rekem, Zur, Hur and Reba."},
 			{"type": "reach", "text": "Climb to the overlook of the Jordan", "label": "Overlook of the Jordan", "dist": 160.0, "site": "cairn",
 				"done": "Moses climbs Mount Nebo and sees the whole land. He dies there, a hundred and twenty years old, his eye undimmed.\n\nJoshua son of Nun, full of the spirit of wisdom, leads now."},

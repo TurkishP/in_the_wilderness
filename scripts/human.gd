@@ -45,6 +45,72 @@ const HAIR_COLORS := [Color(0.1, 0.09, 0.09), Color(0.24, 0.16, 0.11), Color(0.4
 const CLOTH_COLORS := [Color(0.86, 0.82, 0.72), Color(0.76, 0.66, 0.5), Color(0.74, 0.55, 0.25), Color(0.62, 0.32, 0.2), Color(0.6, 0.18, 0.16), Color(0.42, 0.45, 0.26), Color(0.2, 0.26, 0.48), Color(0.25, 0.24, 0.24)]
 const SASH_COLORS := [Color(0.2, 0.32, 0.6), Color(0.65, 0.16, 0.14), Color(0.4, 0.27, 0.17), Color(0.22, 0.45, 0.25), Color(0.9, 0.86, 0.74), Color(0.12, 0.12, 0.13)]
 const LEATHER := Color(0.36, 0.25, 0.16)
+## The material of everything worn: woven cloth. Each point is looked up by where it is on the
+## standing body (CUSTOM0, set in _commit), from whichever side faces it most squarely, so the
+## threads and patterns do not slide as the figure moves. The weave fades out with distance,
+## where it would only shimmer; broad uneven shades stay.
+const CLOTH_SHADER := """
+shader_type spatial;
+render_mode %s;
+uniform vec3 tint : source_color = vec3(1.0);
+uniform vec3 second : source_color = vec3(1.0);
+uniform vec3 third : source_color = vec3(1.0);
+uniform int pattern = 0;
+uniform float hem = 0.0;
+varying vec3 rest;
+
+float hash(vec3 p) {
+	p = fract(p * 0.3183099 + vec3(0.1, 0.2, 0.3));
+	p *= 17.0;
+	return fract(p.x * p.y * p.z * (p.x + p.y + p.z));
+}
+
+float cloud(vec3 p) {
+	vec3 i = floor(p);
+	vec3 f = fract(p);
+	f = f * f * (3.0 - 2.0 * f);
+	return mix(mix(mix(hash(i), hash(i + vec3(1, 0, 0)), f.x), mix(hash(i + vec3(0, 1, 0)), hash(i + vec3(1, 1, 0)), f.x), f.y),
+		mix(mix(hash(i + vec3(0, 0, 1)), hash(i + vec3(1, 0, 1)), f.x), mix(hash(i + vec3(0, 1, 1)), hash(i + vec3(1, 1, 1)), f.x), f.y), f.z);
+}
+
+// Plain weave: each thread goes over one and under the next.
+float weave(vec2 uv) {
+	vec2 cell = floor(uv);
+	vec2 f = fract(uv);
+	float along = mod(cell.x + cell.y, 2.0) < 1.0 ? f.x : f.y;
+	float across = mod(cell.x + cell.y, 2.0) < 1.0 ? f.y : f.x;
+	return 0.72 + 0.28 * sin(along * 3.14159) * (0.6 + 0.4 * sin(across * 3.14159));
+}
+
+void vertex() {
+	rest = CUSTOM0.xyz;
+}
+
+void fragment() {
+	vec3 face = abs(normalize(cross(dFdx(rest), dFdy(rest))));
+	vec3 w = pow(face, vec3(4.0));
+	w /= (w.x + w.y + w.z);
+	vec3 q = rest * 130.0;
+	float threads = weave(q.zy) * w.x + weave(q.xz) * w.y + weave(q.xy) * w.z;
+	float far = clamp(max(fwidth(q.x), max(fwidth(q.y), fwidth(q.z))) * 1.3, 0.0, 1.0);
+	threads = mix(threads, 0.88, far);
+	vec3 color = tint;
+	if (pattern == 1) {
+		float s = fract(atan(rest.x, rest.z) / 6.28318 * 9.0 + cloud(rest * 3.0) * 0.08);
+		color = s < 0.5 ? tint : (s < 0.66 ? second : (s < 0.84 ? tint : third));
+	} else if (pattern == 2) {
+		float h = rest.y - hem;
+		color = h < 0.03 ? second : (h < 0.045 ? tint : (h < 0.07 ? third : (h < 0.085 ? tint : (h < 0.1 ? second : tint))));
+	}
+	float shade = 0.86 + 0.2 * cloud(rest * vec3(7.0, 2.5, 7.0)) + 0.06 * cloud(rest * 40.0);
+	ALBEDO = color * threads * shade * 1.12;
+	ROUGHNESS = 1.0;
+	SPECULAR = 0.15;
+	if (!FRONT_FACING) {
+		NORMAL = -NORMAL;
+	}
+}
+"""
 ## Clothing pieces seen from inside as well as out.
 const TWO_SIDED := ["skirt_short", "skirt_long", "sash", "cloak", "band", "band_wide", "crown", "necklace"]
 ## Hair meshes by "hair" index. "" = no hair mesh.
@@ -56,14 +122,71 @@ const ANIMS := ["Idle", "Walk", "Jog_Fwd", "Sprint", "Sword_Attack", "Spell_Simp
 ## from top right to bottom left. hit: when it lands; chain: the soonest the next blow may follow;
 ## length: how long the move takes if nothing follows (seconds at normal speed; a heavy weapon is
 ## slower, see attack()). The clips are made from poses of the arms, chest, hips and legs in
-## _library().
+## _library(). The timing follows real fencing and staff work: about a third of a second gathering
+## the body and drawing the weapon back, a quick cut of under 0.2 s, then half a second of
+## recovering balance before the figure is ready again.
 const BLOWS := [
-	{"shot": "blow_a", "hit": 0.16, "chain": 0.26, "length": 0.5},
-	{"shot": "blow_b", "hit": 0.13, "chain": 0.22, "length": 0.42},
-	{"shot": "blow_c", "hit": 0.2, "chain": 1e9, "length": 0.55},
+	{"shot": "blow_a", "hit": 0.5, "chain": 0.62, "length": 1.0, "power": 1.0, "arc": 0.2},
+	{"shot": "blow_b", "hit": 0.42, "chain": 0.55, "length": 0.9, "power": 1.1, "arc": -0.1},
+	{"shot": "blow_c", "hit": 0.55, "chain": 1e9, "length": 1.15, "power": 1.4, "arc": -0.1},
 ]
+## Each kind of weapon is used in its own way: swords cut (BLOWS, poses in _blow_keys), daggers
+## stab, sickle swords hook and slash, axes chop, clubs and maces smash, spears thrust, and the
+## staff strikes with its butt (poses in _style_keys). Each style's blows in the order of a combo
+## (the staff has only one): hit, chain and length as in BLOWS; power, the damage as a share of
+## the weapon's; arc, how wide it reaches (the cosine of the angle off straight ahead that it
+## still hits: 0.7 a narrow thrust, -0.3 a wide sweep). A bare fist punches with a sword's timing.
+const STYLE_OF := {"dagger": "dagger", "sickle": "sickle", "sword_short": "sword", "sword": "sword", "sword_long": "sword",
+	"axe": "axe", "club": "bludgeon", "mace": "bludgeon", "spear": "spear", "spear_long": "spear", "staff": "staff"}
+const STYLES := {
+	"sword": BLOWS,
+	"dagger": [
+		{"shot": "blow_a", "hit": 0.32, "chain": 0.42, "length": 0.7, "power": 1.0, "arc": 0.6},
+		{"shot": "blow_b", "hit": 0.3, "chain": 0.4, "length": 0.7, "power": 1.1, "arc": 0.5},
+		{"shot": "blow_c", "hit": 0.38, "chain": 1e9, "length": 0.85, "power": 1.4, "arc": 0.45},
+	],
+	"sickle": [
+		{"shot": "blow_a", "hit": 0.5, "chain": 0.62, "length": 1.0, "power": 1.0, "arc": 0.3},
+		{"shot": "blow_b", "hit": 0.45, "chain": 0.58, "length": 0.95, "power": 1.1, "arc": -0.1},
+		{"shot": "blow_c", "hit": 0.55, "chain": 1e9, "length": 1.15, "power": 1.4, "arc": -0.2},
+	],
+	"axe": [
+		{"shot": "blow_a", "hit": 0.55, "chain": 0.68, "length": 1.1, "power": 1.0, "arc": 0.2},
+		{"shot": "blow_b", "hit": 0.5, "chain": 0.65, "length": 1.05, "power": 1.1, "arc": -0.2},
+		{"shot": "blow_c", "hit": 0.62, "chain": 1e9, "length": 1.3, "power": 1.4, "arc": 0.35},
+	],
+	"bludgeon": [
+		{"shot": "blow_a", "hit": 0.55, "chain": 0.68, "length": 1.1, "power": 1.0, "arc": 0.35},
+		{"shot": "blow_b", "hit": 0.48, "chain": 0.62, "length": 1.0, "power": 1.1, "arc": 0.0},
+		{"shot": "blow_c", "hit": 0.62, "chain": 1e9, "length": 1.3, "power": 1.4, "arc": -0.3},
+	],
+	"spear": [
+		{"shot": "blow_a", "hit": 0.45, "chain": 0.58, "length": 0.95, "power": 1.0, "arc": 0.7},
+		{"shot": "blow_b", "hit": 0.45, "chain": 0.58, "length": 0.95, "power": 1.1, "arc": 0.65},
+		{"shot": "blow_c", "hit": 0.55, "chain": 1e9, "length": 1.15, "power": 1.4, "arc": 0.7},
+	],
+	"staff": [
+		{"shot": "blow_a", "hit": 0.55, "chain": 1e9, "length": 1.05, "power": 1.25, "arc": 0.6},
+		{"shot": "blow_b", "hit": 0.66, "chain": 1e9, "length": 1.2, "power": 0.8, "arc": -1.0, "stomp": true},
+	],
+}
+## The sword's fourth blow (Fourth Cut): the first cut played backwards, rising from low to high.
+const FOURTH_CUT := {"shot": "blow_a", "letter": "D", "hit": 0.5, "chain": 1e9, "length": 1.0, "power": 1.2, "arc": 0.2}
+## The left arm in the poses of _style_keys: guarding (a shield before the chest), held back for
+## balance, raised, out to the side, reaching ahead.
+const GUARD_L := {"upperarm_l": Vector3(0.3, -0.75, 0.6), "lowerarm_l": Vector3(-0.2, 0.25, 0.95)}
+const BALANCE_L := {"upperarm_l": Vector3(0.45, -0.85, -0.25), "lowerarm_l": Vector3(0.3, -0.6, 0.75)}
+const RAISED_L := {"upperarm_l": Vector3(0.35, 0.05, 0.94), "lowerarm_l": Vector3(0.05, 0.3, 0.95)}
+const OUT_L := {"upperarm_l": Vector3(0.8, -0.5, 0.3), "lowerarm_l": Vector3(0.6, -0.3, 0.75)}
+const REACH_L := {"upperarm_l": Vector3(0.35, -0.35, 0.87), "lowerarm_l": Vector3(0.1, -0.1, 0.99)}
+## How far a spear's shaft runs behind the fist and ahead of it, head and all (see _item_model).
+const SPEAR_BACK := 0.6
+const SPEAR_FRONT := 1.45
 ## The sling: whirled overhead for as long as the button is held (at least WHIRL_TIME), then the
 ## arm comes over and lets go RELEASE seconds later; the throw is over THROW_TIME after letting go.
+## When the fist of the punch clip (Punch_Cross) is out furthest, at its own speed. A punch is
+## played at the rate that brings the fist out when the blow lands.
+const PUNCH_HIT := 0.25
 const WHIRL_TIME := 0.34
 const RELEASE := 0.08
 const THROW_TIME := 0.3
@@ -77,6 +200,43 @@ const ROLL_MAX := 2.3
 const WRIST_MAX := 1.1
 const ON_BACK := ["staff", "spear", "spear_long", "bow", "shield"]
 const NOT_WEAPONS := ["none", "shield", "bow"]
+## Weapons swung with both hands (Items "hands": 2), and how far apart the hands are on them.
+const TWO_HANDED := ["staff"]
+const STAFF_GRIP := 0.4
+## How far a staff runs from the right fist to its butt and to its tip (see _item_model), and
+## how thick it is: what _clear_shaft keeps out of the body.
+const STAFF_BUTT := 0.6
+const STAFF_TIP := 1.1
+## For a blow the fists slide this far up a staff from where it is carried, to near its top: the
+## butt is then STAFF_BACK behind the right fist and the top STAFF_FRONT ahead of it.
+const STAFF_SLIDE := 0.75
+const STAFF_BACK := STAFF_BUTT + STAFF_SLIDE
+const STAFF_FRONT := STAFF_TIP - STAFF_SLIDE
+const STAFF_RADIUS := 0.022
+
+
+## Which way a weapon of `kind` is used (STYLE_OF); a bare fist or anything else, as a sword.
+static func style_of(kind: String) -> String:
+	return str(STYLE_OF.get(kind, "sword"))
+
+
+## The blows of a weapon of `kind`, in the order of a combo (see STYLES).
+static func blows(kind: String) -> Array:
+	return STYLES[style_of(kind)]
+
+
+## The clip of blow `letter` ("A", "B", "C" or "Air") made by `side`'s hand with a weapon of
+## `kind`. Swords have the plain names (Blow_A_R); the others are named for their style
+## (Blow_A_R_spear). Off the ground every one-handed weapon comes down from overhead as a sword
+## does; the staff has its own thrust there too.
+static func blow_clip(letter: String, side: String, kind: String) -> String:
+	var style := style_of(kind)
+	if style == "staff":
+		return "Blow_%s_R_staff" % ("Air" if letter == "Air" else letter)
+	if style == "sword" or letter == "Air":
+		return "Blow_%s_%s" % [letter, side.to_upper()]
+	return "Blow_%s_%s_%s" % [letter, side.to_upper(), style]
+const DENSE := 0.03
 ## Reaching to the back or the belt to draw or put away a weapon; it changes place halfway.
 const STOW_SWAP := 0.14
 const STOW_TIME := 0.36
@@ -92,6 +252,8 @@ const UNPLANT_SPEED := 2.0
 ## Coming down after at least this long off the ground (seconds), a figure standing still sinks
 ## on its knees to take the landing.
 const LAND_AFTER := 0.3
+## Figures built smaller than this are children (see _child_body).
+const CHILD_SCALE := 0.8
 
 static var _bodies := {}     # sex -> measured body data
 static var _meshes := {}     # "sex/piece" -> generated ArrayMesh
@@ -100,6 +262,7 @@ static var _libraries := {}  # sex -> AnimationLibrary retargeted to that body
 
 var look := {}
 var weapon_kind := "none"
+var shield_style := "round"       # the shape of a shield made by set_hands: "round", "hide" or "rect"
 var weapon: Node3D
 var skeleton: Skeleton3D
 var head: BoneAttachment3D        # things worn on the head hang from this
@@ -142,6 +305,7 @@ var _legs := ""                   # what the hips and legs are doing over the wa
 var _legs_left := 0.0             # seconds until that is over
 var _land_left := 0.0             # seconds until the knees have come up again after a landing
 var _first_blow := {}             # side -> animation node of the first blow, which has an airborne form
+var _blow_nodes := {}             # side -> the animation nodes of blows A, B and C
 var _in_air := false              # off the ground
 var _air_time := 0.0              # for how long
 var _air := 0.0                   # how far the body has gone over to the airborne pose, 0..1
@@ -153,6 +317,7 @@ var draw_amount := 0.0            # how far it is drawn, 0..1
 var _loose_t := -1.0              # seconds since an arrow was loosed, or -1
 var _arrow: Node3D                # the arrow on the string while the bow is drawn
 var _string: Array = []           # the two halves of the bow string
+var _child := false               # built with a child's body (see _child_body)
 
 
 static func value_name(key: String, l: Dictionary) -> String:
@@ -197,7 +362,16 @@ func _i(key: String) -> int:
 # ================================================================ building
 
 ## opts: cloth_color, sash_color, head_color (Color overrides), scale (float), crown (bool),
-## always_animate (bool: keep animating while the game is paused, for the character creator).
+## always_animate (bool: keep animating while the game is paused, for the character creator),
+## child (bool; by default a figure scaled below CHILD_SCALE is a child, see _child_body).
+## A figure built before it was put into the scene (as the camp's people are) takes its standing
+## pose as it arrives, not at the first frame after: a dialog that opens at once would hold that
+## frame up and leave the figure with its arms out.
+func _ready() -> void:
+	if _tree != null:
+		_tree.advance(0.0)
+
+
 func build(l: Dictionary, opts: Dictionary = {}) -> void:
 	for c in get_children():
 		remove_child(c)
@@ -222,8 +396,10 @@ func build(l: Dictionary, opts: Dictionary = {}) -> void:
 	look = l.duplicate()
 	_opts = opts
 	var sex := _i("sex")
-	var d := _body(sex)
-	scale = Vector3.ONE * float(opts.get("scale", 1.0))
+	var size := float(opts.get("scale", 1.0))
+	_child = bool(opts.get("child", size < CHILD_SCALE))
+	var d := _body(sex, _child)
+	scale = Vector3.ONE * size
 
 	var scene: PackedScene = d["scene"]
 	_model = scene.instantiate()
@@ -235,9 +411,23 @@ func build(l: Dictionary, opts: Dictionary = {}) -> void:
 	var brows_mi: MeshInstance3D = skeleton.get_node("Eyebrows")
 
 	var hair_c: Color = HAIR_COLORS[_i("hair_color")]
-	body_mi.material_override = _skin_material(sex, _i("skin"))
+	body_mi.material_override = _skin_material(sex, _i("skin"), _child)
 	eyes_mi.material_override = _eye_material(_i("eyes"))
-	skeleton.set_bone_pose_scale(skeleton.find_bone("Head"), HEAD_SCALES[_i("face")])
+	var head_size: Vector3 = HEAD_SCALES[_i("face")]
+	if _child:
+		# A child has a large, round head, narrow shoulders and short limbs; the smaller the child,
+		# the more so. The legs are shortened by scaling the thighs (and all below them), and the
+		# body is lowered by what that takes off, so the feet stay on the ground.
+		body_mi.mesh = d["mesh"]
+		var young := clampf((0.9 - size) / 0.35, 0.0, 1.0)
+		head_size *= Vector3(1.04, 0.98, 1.02) * lerpf(1.25, 1.55, young)
+		var legs := lerpf(0.95, 0.92, young)
+		var arms := lerpf(0.92, 0.86, young)
+		for side in ["l", "r"]:
+			skeleton.set_bone_pose_scale(skeleton.find_bone("thigh_" + side), Vector3.ONE * legs)
+			skeleton.set_bone_pose_scale(skeleton.find_bone("clavicle_" + side), Vector3.ONE * arms)
+		_model.position.y = -(1.0 - legs) * float((d["rest"] as Dictionary)["thigh_l"].y)
+	skeleton.set_bone_pose_scale(skeleton.find_bone("Head"), head_size)
 
 	head = BoneAttachment3D.new()
 	head.bone_name = "Head"
@@ -264,11 +454,12 @@ func build(l: Dictionary, opts: Dictionary = {}) -> void:
 	# Brows: the body's own set is "heavy" on the man and "fine" on the woman. For the other
 	# choice, hide it and hang the other set on the head.
 	var own_brows := 0 if sex == 0 else 1
-	if _i("brows") == own_brows:
+	var brows := 1 if _child else _i("brows")   # children have fine brows
+	if brows == own_brows:
 		brows_mi.material_override = _hair_material(_texture_index(brows_mi), hair_c)
 	else:
 		brows_mi.visible = false
-		_attach_to_head("brows_regular" if _i("brows") == 0 else "brows_female", hair_c, sex)
+		_attach_to_head("brows_regular" if brows == 0 else "brows_female", hair_c, sex)
 
 	var covering := _i("head")
 	var covered := covering == 1 or covering == 3
@@ -289,9 +480,13 @@ func build(l: Dictionary, opts: Dictionary = {}) -> void:
 
 
 ## Measures one body once: bones, vertex ownership, and the places clothes are fitted to.
-static func _body(sex: int) -> Dictionary:
-	if _bodies.has(sex):
-		return _bodies[sex]
+static func _body(sex: int, child: bool = false) -> Dictionary:
+	var id := "%d%s" % [sex, "c" if child else ""]
+	if _bodies.has(id):
+		return _bodies[id]
+	if child:
+		_bodies[id] = _child_body(_body(sex), id)
+		return _bodies[id]
 	var scene: PackedScene = load(DIR + ("female.gltf" if sex == 1 else "male.gltf"))
 	var inst: Node3D = scene.instantiate()
 	var sk: Skeleton3D = inst.find_child("Skeleton3D", true, false)
@@ -362,24 +557,71 @@ static func _body(sex: int) -> Dictionary:
 		"head_top": head_hi.y, "head_lo": head_lo, "head_hi": head_hi,
 		"brow_top": brows_aabb.position.y + brows_aabb.size.y, "brow_y": brows_aabb.get_center().y,
 		"eye_y": eyes_aabb.get_center().y,
+		"arrays": arrays, "id": id,
 	}
-	_bodies[sex] = d
+	_bodies[id] = d
 	inst.free()
 	return d
+
+
+## A child's body: the adult body made fuller, so that scaled down it has a child's soft, rounded
+## limbs instead of a small man's thin ones. Each vertex moves out along its normal by an amount
+## set by the bones it follows (none for the head, a little for hands and feet, most for the
+## thighs and the belly). Clothes are fitted to this body, not the adult one.
+static func _child_body(adult: Dictionary, id: String) -> Dictionary:
+	var verts: PackedVector3Array = adult["verts"]
+	var normals: PackedVector3Array = adult["normals"]
+	var bones: PackedInt32Array = adult["bones"]
+	var weights: PackedFloat32Array = adult["weights"]
+	var per: int = adult["per"]
+	var bind: Dictionary = adult["bind"]
+	var fuller := {}
+	for name in bind:
+		fuller[int(bind[name])] = _plump(str(name))
+	var grown := PackedVector3Array()
+	grown.resize(verts.size())
+	for v in verts.size():
+		var by := 0.0
+		for k in per:
+			by += weights[v * per + k] * float(fuller.get(bones[v * per + k], 0.0))
+		grown[v] = verts[v] + normals[v] * by
+	var arrays: Array = (adult["arrays"] as Array).duplicate()
+	arrays[Mesh.ARRAY_VERTEX] = grown
+	for extra in [Mesh.ARRAY_CUSTOM0, Mesh.ARRAY_CUSTOM1, Mesh.ARRAY_CUSTOM2, Mesh.ARRAY_CUSTOM3]:
+		arrays[extra] = null    # unused by the skin material, and they would need their format flags
+	var mesh := ArrayMesh.new()
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays, [], {}, Mesh.ARRAY_FLAG_USE_8_BONE_WEIGHTS if per == 8 else 0)
+	var d := adult.duplicate()
+	d["verts"] = grown
+	d["mesh"] = mesh
+	d["id"] = id
+	return d
+
+
+## How much fuller a child is at each bone (metres, before the figure is scaled down).
+static func _plump(bone: String) -> float:
+	for part in [["thigh", 0.02], ["calf", 0.013], ["upperarm", 0.018], ["lowerarm", 0.013],
+			["pelvis", 0.018], ["spine_01", 0.024], ["spine_02", 0.02], ["spine_03", 0.014], ["clavicle", 0.01],
+			["neck", 0.012], ["hand", 0.005], ["foot", 0.005], ["ball", 0.004]]:
+		if bone.begins_with(str(part[0])):
+			return float(part[1])
+	return 0.0
 
 
 func _texture(file: String) -> Texture2D:
 	return load(DIR + "tex/" + file)
 
 
-func _skin_material(sex: int, tone: int) -> StandardMaterial3D:
-	var key := "skin/%d/%d" % [sex, tone]
+## A child's skin has much less of the grown body's muscle relief.
+func _skin_material(sex: int, tone: int, child: bool = false) -> StandardMaterial3D:
+	var key := "skin/%d/%d/%s" % [sex, tone, child]
 	if not _materials.has(key):
 		var m := StandardMaterial3D.new()
 		m.albedo_texture = _texture("skin_female.png" if sex == 1 else "skin_male.png")
 		m.albedo_color = SKIN_TINTS[tone]
 		m.normal_enabled = true
 		m.normal_texture = _texture("normal_female.png" if sex == 1 else "normal_male.png")
+		m.normal_scale = 0.3 if child else 1.0
 		m.roughness = 0.8
 		_materials[key] = m
 	return _materials[key]
@@ -416,14 +658,36 @@ func _hair_material(sheet: int, color: Color) -> StandardMaterial3D:
 	return _materials[key]
 
 
-func _cloth_material(color: Color, two_sided: bool = false) -> StandardMaterial3D:
-	var key := "cloth/%s/%s" % [color.to_html(), two_sided]
+## Woven cloth of `color`. `pattern` "stripes" runs bands of `second` and `third` down the
+## garment; "hem" puts them as a border above its lower edge (`hem` is that edge's height).
+func _cloth_material(color: Color, two_sided: bool = false, pattern: String = "", second: Color = Color.WHITE, third: Color = Color.WHITE, hem: float = 0.0) -> Material:
+	var key := "cloth/%s/%s/%s/%s/%s/%.2f" % [color.to_html(), two_sided, pattern, second.to_html(), third.to_html(), hem]
+	if not _materials.has(key):
+		var cull := "cull_disabled" if two_sided else "cull_back"
+		if not _materials.has(cull):
+			var shader := Shader.new()
+			shader.code = CLOTH_SHADER % cull
+			_materials[cull] = shader
+		var m := ShaderMaterial.new()
+		m.shader = _materials[cull]
+		m.set_shader_parameter("tint", color)
+		m.set_shader_parameter("second", second)
+		m.set_shader_parameter("third", third)
+		m.set_shader_parameter("pattern", ["", "stripes", "hem"].find(pattern))
+		m.set_shader_parameter("hem", hem)
+		_materials[key] = m
+	return _materials[key]
+
+
+## Wood, hide, horn or (`metal`) bronze and iron, for what is held in the hand.
+func _hard_material(color: Color, metal: bool = false) -> StandardMaterial3D:
+	var key := "hard/%s/%s" % [color.to_html(), metal]
 	if not _materials.has(key):
 		var m := StandardMaterial3D.new()
 		m.albedo_color = color
-		m.roughness = 0.95
-		if two_sided:
-			m.cull_mode = BaseMaterial3D.CULL_DISABLED
+		m.roughness = 0.38 if metal else 0.85
+		m.metallic = 0.7 if metal else 0.0
+		m.metallic_specular = 0.6
 		_materials[key] = m
 	return _materials[key]
 
@@ -508,8 +772,11 @@ func _dress(sex: int, d: Dictionary, body_mi: MeshInstance3D, opts: Dictionary) 
 	_wear(sex, d, body_mi, "shoes", Color(0.3, 0.2, 0.13))
 	if opts.has("wear"):
 		# The player: what is equipped decides the clothes (Items "wear"), dyed in the chosen colors.
+		# A third entry names a pattern woven into the piece (see _cloth_material), in the sash
+		# color and a darker shade of the cloth.
 		for p in opts["wear"]:
-			_wear(sex, d, body_mi, str(p[0]), _wear_color(p[1], cloth, sash_c), TWO_SIDED.has(str(p[0])))
+			var base := _wear_color(p[1], cloth, sash_c)
+			_wear(sex, d, body_mi, str(p[0]), base, TWO_SIDED.has(str(p[0])), str(p[2]) if p.size() > 2 else "", sash_c, base.darkened(0.45))
 	else:
 		_wear(sex, d, body_mi, "top_long" if long_robe else "top_short", cloth)
 		_wear(sex, d, body_mi, "skirt_long" if long_robe else "skirt_short", cloth, true)
@@ -551,8 +818,8 @@ static func _wear_color(c: Variant, cloth: Color, sash: Color) -> Color:
 
 
 ## Adds one clothing piece as a mesh skinned to the body's skeleton.
-func _wear(sex: int, d: Dictionary, body_mi: MeshInstance3D, piece: String, color: Color, two_sided: bool = false) -> void:
-	var key := "%d/%s" % [sex, piece]
+func _wear(sex: int, d: Dictionary, body_mi: MeshInstance3D, piece: String, color: Color, two_sided: bool = false, pattern: String = "", second: Color = Color.WHITE, third: Color = Color.WHITE) -> void:
+	var key := "%s/%s" % [d["id"], piece]
 	if not _meshes.has(key):
 		_meshes[key] = _make_piece(d, piece)
 	var mesh: ArrayMesh = _meshes[key]
@@ -562,7 +829,7 @@ func _wear(sex: int, d: Dictionary, body_mi: MeshInstance3D, piece: String, colo
 	mi.name = piece
 	mi.mesh = mesh
 	mi.skin = body_mi.skin
-	mi.material_override = _cloth_material(color, two_sided)
+	mi.material_override = _cloth_material(color, two_sided, pattern, second, third, mesh.get_aabb().position.y)
 	skeleton.add_child(mi)
 	mi.skeleton = NodePath("..")
 	garments.append(piece)
@@ -615,7 +882,7 @@ static func _make_piece(d: Dictionary, piece: String) -> ArrayMesh:
 				if o == upper_r:
 					return _along(p, rest, "upperarm_r", "lowerarm_r") < 0.3
 				return false
-			return _shell(d, 0.045 if piece == "mantle" else 0.03, choose)
+			return _shell(d, 0.045 if piece == "mantle" else 0.02, choose)
 		"bracers":
 			choose = func(p: Vector3, o: int) -> bool:
 				if o == lower_l:
@@ -644,36 +911,43 @@ static func _make_piece(d: Dictionary, piece: String) -> ArrayMesh:
 			var head_b: int = bind["Head"]
 			var neck_b: int = bind["neck_01"]
 			var mid_z: float = ((d["head_lo"] as Vector3).z + (d["head_hi"] as Vector3).z) * 0.5
-			var brow: float = float(d["brow_top"]) + 0.03
+			var brow: float = float(d["brow_top"]) + 0.012
 			var ear: float = float(d["eye_y"]) - 0.05
+			var skull := _skull_half(d)
 			choose = func(p: Vector3, o: int) -> bool:
 				if o == head_b:
+					if absf(p.x) > skull and p.y < brow + 0.01:
+						return false    # the ears stay out, or the cloth would stand off round them
 					return p.y > brow or (p.z < mid_z - 0.015 and p.y > ear)
 				if o == neck_b:
 					return p.z < mid_z - 0.01
 				return false
-			return _shell(d, 0.014, choose)
+			return _shell(d, 0.009, choose)
 		"helmet":
 			# Like the cap but thicker, coming down over the brow and the ears.
 			var head_b: int = bind["Head"]
 			var mid_z: float = ((d["head_lo"] as Vector3).z + (d["head_hi"] as Vector3).z) * 0.5
 			var brow: float = float(d["brow_top"]) + 0.01
 			var ear: float = float(d["eye_y"]) - 0.07
+			var skull := _skull_half(d)
 			choose = func(p: Vector3, o: int) -> bool:
 				if o == head_b:
+					if absf(p.x) > skull and p.y < brow + 0.01:
+						return false
 					return p.y > brow or (p.z < mid_z + 0.01 and p.y > ear)
 				return false
-			return _shell(d, 0.032, choose)
+			return _shell(d, 0.02, choose)
 		"necklace":
 			var neck_y: float = (rest["neck_01"] as Vector3).y
 			return _ring(d, neck_y + 0.015, 0.018, 0.012, ["neck_01"], ["neck_01"])
 		"band":
-			return _ring(d, float(d["brow_top"]) + 0.05, 0.022, 0.02, ["Head"], ["Head"])
+			# Round the forehead just above the brows, over the edge of the cap.
+			return _band(d, float(d["brow_top"]) + 0.016, 0.02, 0.014)
 		"band_wide":
 			# Sits over hair, so it stands further off the skull.
-			return _ring(d, float(d["brow_top"]) + 0.05, 0.026, 0.034, ["Head"], ["Head"])
+			return _band(d, float(d["brow_top"]) + 0.018, 0.026, 0.024)
 		"crown":
-			return _ring(d, float(d["brow_top"]) + 0.06, 0.034, 0.03, ["Head"], ["Head"])
+			return _band(d, float(d["brow_top"]) + 0.03, 0.032, 0.012)
 		"sash":
 			return _ring(d, (rest["spine_01"] as Vector3).y, 0.075, 0.034, ["pelvis", "spine_01", "spine_02"], ["pelvis", "spine_01"])
 		"skirt_short":
@@ -752,8 +1026,17 @@ static func _commit(v: PackedVector3Array, n: PackedVector3Array, b: PackedInt32
 	arrays[Mesh.ARRAY_BONES] = b
 	arrays[Mesh.ARRAY_WEIGHTS] = w
 	arrays[Mesh.ARRAY_INDEX] = i
+	# Where each corner is on the standing body, for the cloth's weave and patterns: laid on
+	# from there they stay put on the cloth however the limbs move (see CLOTH_SHADER).
+	var rest := PackedFloat32Array()
+	rest.resize(v.size() * 3)
+	for k in v.size():
+		rest[k * 3] = v[k].x
+		rest[k * 3 + 1] = v[k].y
+		rest[k * 3 + 2] = v[k].z
+	arrays[Mesh.ARRAY_CUSTOM0] = rest
 	var mesh := ArrayMesh.new()
-	var flags: int = Mesh.ARRAY_FLAG_USE_8_BONE_WEIGHTS if per == 8 else 0
+	var flags: int = (Mesh.ARRAY_FLAG_USE_8_BONE_WEIGHTS if per == 8 else 0) | (Mesh.ARRAY_CUSTOM_RGB_FLOAT << Mesh.ARRAY_FORMAT_CUSTOM0_SHIFT)
 	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays, [], {}, flags)
 	return mesh
 
@@ -826,6 +1109,64 @@ static func _ring(d: Dictionary, y: float, height: float, gap: float, measure: A
 	return _commit(v, nrm, b, w, idx, per)
 
 
+## Half the width of the skull just above the ears: anything of the head wider than this, lower
+## down, is an ear.
+static func _skull_half(d: Dictionary) -> float:
+	return float(_section(d, float(d["brow_top"]) + 0.03, ["Head"], 0.012).get("half", 0.075)) + 0.006
+
+
+## A band round the head at height `y`, `height` tall and `gap` off it, following the head's own
+## outline (taken angle by angle from the vertices, ears left out, dents filled) rather than an
+## ellipse, so it sits close all round.
+static func _band(d: Dictionary, y: float, height: float, gap: float) -> ArrayMesh:
+	var verts: PackedVector3Array = d["verts"]
+	var owner: PackedInt32Array = d["owner"]
+	var bind: Dictionary = d["bind"]
+	var per: int = d["per"]
+	var head_b: int = bind["Head"]
+	var skull := _skull_half(d)
+	var near: Array = []
+	var center := Vector2.ZERO
+	for i in verts.size():
+		var p := verts[i]
+		if owner[i] == head_b and absf(p.y - y) < maxf(0.012, height * 0.6) and absf(p.x) <= skull:
+			near.append(Vector2(p.x, p.z))
+			center += Vector2(p.x, p.z)
+	if near.is_empty():
+		return null
+	center /= near.size()
+	var sides := 32
+	var r := PackedFloat32Array()
+	r.resize(sides)
+	for q in near:
+		var off: Vector2 = q - center
+		var k := int(round(fposmod(off.angle(), TAU) / TAU * sides)) % sides
+		r[k] = maxf(r[k], off.length())
+	for step in 2:
+		# Empty or dented places take their neighbours' reach.
+		var out := r.duplicate()
+		for k in sides:
+			var beside := (r[(k + sides - 1) % sides] + r[(k + 1) % sides]) * 0.5
+			out[k] = maxf(r[k], beside)
+		r = out
+	var v := PackedVector3Array()
+	var nrm := PackedVector3Array()
+	var b := PackedInt32Array()
+	var w := PackedFloat32Array()
+	var idx := PackedInt32Array()
+	for row in 2:
+		for k in sides:
+			var a := TAU * k / sides
+			var reach := r[k] + gap
+			v.append(Vector3(center.x + cos(a) * reach, y + (row - 0.5) * height, center.y + sin(a) * reach))
+			nrm.append(Vector3(cos(a), 0.0, sin(a)))
+			_put_weights(b, w, [[head_b, 1.0]], per)
+	for k in sides:
+		var k2 := (k + 1) % sides
+		idx.append_array([k, sides + k, k2, k2, sides + k, sides + k2])
+	return _commit(v, nrm, b, w, idx, per)
+
+
 ## The hanging part of a tunic or robe: a flared tube from the waist to `hem`. Its lower rows
 ## follow the legs, so it parts and swings as the figure walks.
 static func _skirt(d: Dictionary, hem: float) -> ArrayMesh:
@@ -851,8 +1192,8 @@ static func _skirt(d: Dictionary, hem: float) -> ArrayMesh:
 		var s := _section(d, y, leg_bones)
 		if not s.is_empty():
 			# Never narrower than the row above, and always a little wider: the cloth flares.
-			rx = maxf(rx + 0.006, float(s["half"]) + 0.03)
-			rz = maxf(rz + 0.006, (float(s["front"]) - float(s["back"])) * 0.5 + 0.035)
+			rx = maxf(rx + 0.006, float(s["half"]) + 0.035)
+			rz = maxf(rz + 0.006, (float(s["front"]) - float(s["back"])) * 0.5 + 0.045)
 			cz = (float(s["front"]) + float(s["back"])) * 0.5
 		else:
 			rx += 0.006
@@ -864,10 +1205,12 @@ static func _skirt(d: Dictionary, hem: float) -> ArrayMesh:
 			var x := cos(a) * rx
 			v.append(Vector3(x, y, cz + sin(a) * rz))
 			nrm.append(Vector3(cos(a) / rx, 0.15, sin(a) / rz).normalized())
-			var left := smoothstep(-0.5, 0.5, x / rx)      # +x is the figure's left side
+			var left := smoothstep(-0.3, 0.3, x / rx)      # +x is the figure's left side
 			var pairs: Array
 			if below <= 0.0:
-				var legs := 0.75 * down
+				# From halfway down the thigh the cloth goes wholly with the leg under it, so a leg
+				# stepping forward carries the cloth instead of coming through it.
+				var legs := smoothstep(0.0, 0.55, down)
 				pairs = [[bind["pelvis"], 1.0 - legs], [bind["thigh_l"], legs * left], [bind["thigh_r"], legs * (1.0 - left)]]
 			else:
 				var calf := 0.7 * below
@@ -944,6 +1287,15 @@ func set_weapon(kind: String, color: Color = Color(0, 0, 0, 0)) -> void:
 
 ## What each hand holds. The right takes weapons; the left takes a weapon, a shield or a bow.
 ## `rc` and `lc` tint the metal (or the wood of a bow, the face of a shield); alpha 0 = usual.
+## Gives the battle stance the clip of the weapon in the right hand.
+func _set_guard_clip() -> void:
+	var style := style_of(weapon_kind if is_weapon(weapon_kind) else "none")
+	if not GUARD_STYLES.has(style):
+		style = "sword"
+	for c in _guard_clips:
+		(c as AnimationNodeAnimation).animation = "Guard_" + style
+
+
 func set_hands(right: String, left: String, rc: Color = Color(0, 0, 0, 0), lc: Color = Color(0, 0, 0, 0)) -> void:
 	for n in [weapon, offhand]:
 		if n != null:
@@ -955,10 +1307,15 @@ func set_hands(right: String, left: String, rc: Color = Color(0, 0, 0, 0), lc: C
 	_string = []
 	weapon_kind = right
 	offhand_kind = left
+	_set_guard_clip()
 	_strike_left = 0.0
 	var idle: Animation = _player.get_animation("Idle")
 	var fist_anim: Animation = _player.get_animation("Sword_Attack")
 	_strike = fist_frame(skeleton, fist_anim, 0.46, "r")
+	if TWO_HANDED.has(right):
+		# A staff is struck with held near its top (STAFF_SLIDE): it slides through the hands as
+		# the blow begins, since the carry and the strike are blended (see animate()).
+		_strike.origin -= _strike.basis.y.normalized() * STAFF_SLIDE
 	_strike_l = fist_frame(skeleton, idle, 0.0, "l")
 	if right != "none":
 		weapon = _item_model(right, rc)
@@ -1033,12 +1390,12 @@ func _item_model(kind: String, tint: Color) -> Node3D:
 		"spear", "spear_long":
 			var long := kind == "spear_long"
 			_part(n, _cyl(0.017, 0.02, 2.4 if long else 1.9, wood), Vector3(0, 0.55 if long else 0.35, 0))
-			_part(n, _cyl(0.0, 0.035, 0.3 if long else 0.24, metal), Vector3(0, 1.9 if long else 1.42, 0))
+			_part(n, _cyl(0.0, 0.035, 0.3 if long else 0.24, metal, true), Vector3(0, 1.9 if long else 1.42, 0))
 		"dagger":
 			_blade(n, 0.3, metal)
 		"sickle":
 			_blade(n, 0.44, metal)
-			_part(n, _box(Vector3(0.012, 0.16, 0.045), metal), Vector3(0, 0.56, 0.045), Vector3(0.75, 0, 0))
+			_part(n, _box(Vector3(0.012, 0.16, 0.045), metal, true), Vector3(0, 0.56, 0.045), Vector3(0.75, 0, 0))
 		"sword_short":
 			_blade(n, 0.5, metal)
 		"sword_long":
@@ -1054,17 +1411,36 @@ func _item_model(kind: String, tint: Color) -> Node3D:
 			ball.radial_segments = 8
 			ball.rings = 4
 			head.mesh = ball
-			head.material_override = _cloth_material(metal)
+			head.material_override = _hard_material(metal, true)
 			_part(n, head, Vector3(0, 0.52, 0))
 		"axe":
 			_part(n, _cyl(0.017, 0.019, 0.72, wood), Vector3(0, 0.22, 0))
-			_part(n, _box(Vector3(0.016, 0.2, 0.17), metal), Vector3(0, 0.5, 0.1))
+			_part(n, _box(Vector3(0.016, 0.2, 0.17), metal, true), Vector3(0, 0.5, 0.1))
+		"shield" when shield_style == "hide":
+			# A nomad's small shield: hide stretched over a wicker frame, with a darker edge.
+			var hide := tint if tint.a > 0.0 else Color(0.55, 0.42, 0.28)
+			var skin := _cyl(0.25, 0.25, 0.03, hide)
+			skin.scale = Vector3(0.85, 1.0, 1.15)
+			_part(n, skin, Vector3.ZERO, Vector3(PI * 0.5, 0, 0))
+			var edge := _cyl(0.265, 0.265, 0.02, hide.darkened(0.4))
+			edge.scale = Vector3(0.85, 1.0, 1.15)
+			_part(n, edge, Vector3(0, 0, -0.004), Vector3(PI * 0.5, 0, 0))
+			_part(n, _cyl(0.05, 0.07, 0.025, hide.lightened(0.25)), Vector3(0, 0, 0.025), Vector3(PI * 0.5, 0, 0))
+		"shield" when shield_style == "rect":
+			# The rectangular shield of Canaan and Syria: a board covered in cowhide, bound at
+			# the edges, with a bronze boss.
+			var hide := tint if tint.a > 0.0 else Color(0.66, 0.52, 0.36)
+			_part(n, _box(Vector3(0.46, 0.72, 0.03), hide), Vector3.ZERO)
+			for end in [-1.0, 1.0]:
+				_part(n, _box(Vector3(0.5, 0.045, 0.036), hide.darkened(0.45)), Vector3(0, end * 0.36, 0))
+				_part(n, _box(Vector3(0.045, 0.72, 0.036), hide.darkened(0.45)), Vector3(end * 0.23, 0, 0))
+			_part(n, _cyl(0.03, 0.07, 0.04, bronze, true), Vector3(0, 0.0, 0.03), Vector3(PI * 0.5, 0, 0))
 		"shield":
 			var face := _cyl(0.34, 0.34, 0.035, tint if tint.a > 0.0 else Color(0.6, 0.45, 0.3))
 			_part(n, face, Vector3.ZERO, Vector3(PI * 0.5, 0, 0))
-			var rim := _cyl(0.36, 0.36, 0.025, bronze.darkened(0.2))
+			var rim := _cyl(0.36, 0.36, 0.025, bronze.darkened(0.2), true)
 			_part(n, rim, Vector3(0, 0, -0.004), Vector3(PI * 0.5, 0, 0))
-			var boss := _cyl(0.02, 0.08, 0.05, bronze)
+			var boss := _cyl(0.02, 0.08, 0.05, bronze, true)
 			_part(n, boss, Vector3(0, 0, 0.035), Vector3(PI * 0.5, 0, 0))
 		"bow":
 			var c := tint if tint.a > 0.0 else wood
@@ -1093,7 +1469,7 @@ func _item_model(kind: String, tint: Color) -> Node3D:
 	return n
 
 
-func _cyl(top: float, bottom: float, height: float, color: Color) -> MeshInstance3D:
+func _cyl(top: float, bottom: float, height: float, color: Color, metal: bool = false) -> MeshInstance3D:
 	var mi := MeshInstance3D.new()
 	var c := CylinderMesh.new()
 	c.top_radius = top
@@ -1101,16 +1477,16 @@ func _cyl(top: float, bottom: float, height: float, color: Color) -> MeshInstanc
 	c.height = height
 	c.radial_segments = 12
 	mi.mesh = c
-	mi.material_override = _cloth_material(color)
+	mi.material_override = _hard_material(color, metal)
 	return mi
 
 
-func _box(size: Vector3, color: Color) -> MeshInstance3D:
+func _box(size: Vector3, color: Color, metal: bool = false) -> MeshInstance3D:
 	var mi := MeshInstance3D.new()
 	var b := BoxMesh.new()
 	b.size = size
 	mi.mesh = b
-	mi.material_override = _cloth_material(color)
+	mi.material_override = _hard_material(color, metal)
 	return mi
 
 
@@ -1122,8 +1498,8 @@ func _part(to: Node3D, mi: MeshInstance3D, pos: Vector3, rot: Vector3 = Vector3.
 
 func _blade(to: Node3D, length: float, color: Color) -> void:
 	_part(to, _cyl(0.017, 0.017, 0.13, Color(0.3, 0.2, 0.13)), Vector3.ZERO)
-	_part(to, _box(Vector3(0.03, 0.022, 0.11), color), Vector3(0, 0.07, 0))
-	_part(to, _box(Vector3(0.012, length, 0.05), color), Vector3(0, 0.08 + length * 0.5, 0))
+	_part(to, _box(Vector3(0.03, 0.022, 0.11), color, true), Vector3(0, 0.07, 0))
+	_part(to, _box(Vector3(0.012, length, 0.05), color, true), Vector3(0, 0.08 + length * 0.5, 0))
 
 
 ## An arrow, nocked on the string while the bow is drawn.
@@ -1186,7 +1562,7 @@ func _fist(anim: Animation, time: float) -> Transform3D:
 ## hilt at the sash, pointing down and back. From the left hand the same on the other side, and a
 ## shield flat on the back.
 func _stow_transform(kind: String, side: String) -> Transform3D:
-	var d := _body(_i("sex"))
+	var d := _body(_i("sex"), _child)
 	var rest: Dictionary = d["rest"]
 	var dir: Vector3
 	var at: Vector3
@@ -1295,7 +1671,7 @@ func _make_sling() -> void:
 	ball.radial_segments = 6
 	ball.rings = 3
 	stone.mesh = ball
-	stone.material_override = _cloth_material(Color(0.55, 0.52, 0.48))
+	stone.material_override = _hard_material(Color(0.55, 0.52, 0.48))
 	stone.name = "Stone"
 	stone.position.y = 0.025
 	_sling_pouch.add_child(stone)
@@ -1332,6 +1708,19 @@ static func _library(sex: int, target: Skeleton3D) -> AnimationLibrary:
 			var keys: Dictionary = _blow_keys(side)
 			for blow in ["a", "b", "c", "air"]:
 				lib.add_animation("Blow_%s_%s" % [blow.capitalize(), side.to_upper()], _aimed(target, idle, strike, keys[blow], true))
+			lib.add_animation("Blow_D_%s" % side.to_upper(), _aimed(target, idle, strike, _backwards(keys["a"]), true))
+		for style in ["dagger", "sickle", "axe", "bludgeon", "spear"]:
+			var right: Dictionary = _style_keys(style)
+			for side in ["r", "l"]:
+				for blow in ["a", "b", "c"]:
+					var keys: Array = right[blow] if side == "r" else _mirror_keys(right[blow])
+					lib.add_animation(blow_clip(blow.to_upper(), side, style if style != "bludgeon" else "club"), _aimed(target, idle, strike, keys, true))
+		var staff_keys := _style_keys("staff")
+		for blow in staff_keys:
+			lib.add_animation(blow_clip(blow.capitalize(), "r", "staff"), _aimed(target, idle, strike, staff_keys[blow], true))
+		# The battle stance of each way of fighting (see `battle`).
+		for style in GUARD_STYLES:
+			lib.add_animation("Guard_" + style, _guard_clip(target, idle, strike, style))
 		# Landing from a jump: the knees give, the hips sink over the feet and come up again.
 		lib.add_animation("Land", _aimed(target, idle, strike, [
 			[0.0, {"sink": 0.15, "pitch": 0.14, "shift": Vector3(0.0, 0.0, 0.03)}],
@@ -1445,104 +1834,138 @@ static func _cut(a: Animation, from: float, to: float) -> Animation:
 ## feet stay where the figure stands (the left foot in front, as in the Idle clip); only the last
 ## blow steps into the cut with the front foot ("step") and steps back as it ends.
 static func _blow_keys(side: String) -> Dictionary:
+	# Every blow starts from a wind-up the whole body takes part in: the hips and chest coil away
+	# from the cut, the weight rocks back, the shoulder lifts and the weapon is drawn far back
+	# ("shrug_r" lifts the shoulder, "reach_r" carries it forward, both in radians). Then the hips
+	# drive round, the weight goes onto the front foot, the shoulder follows the arm through, and
+	# the other arm pulls back to balance. The cut carries on well past where it lands.
+	# The fist is placed ("hold_r", model space, metres from the feet) and the blade pointed
+	# ("blade_r"); the elbow then bends toward "pole_r" (by default out and down). A one-handed
+	# cut is drawn back no higher than the head: the fist goes beside the ear, not over it.
+	# A starts from the guard of the battle stance (see _guard_pose): the fist low in front, at
+	# the belly, the blade pointing ahead and up at the foe.
 	var a := [
-		[0.0, {"hips": -0.2, "twist": -0.12, "lean": -0.12, "shift": Vector3(-0.01, 0.0, -0.05),
-			"upperarm_r": Vector3(-0.3, 0.9, 0.15), "lowerarm_r": Vector3(0.2, 0.7, -0.7), "blade_r": Vector3(0.05, 0.45, -0.9),
-			"upperarm_l": Vector3(0.35, -0.5, 0.8), "lowerarm_l": Vector3(-0.05, 0.2, 0.98)}],
-		[0.08, {"hips": -0.1, "twist": -0.08, "lean": -0.06, "shift": Vector3(0.0, 0.0, -0.02),
-			"upperarm_r": Vector3(-0.15, 0.8, 0.55), "lowerarm_r": Vector3(0.12, 0.75, 0.65), "blade_r": Vector3(0.08, 0.99, 0.1),
-			"upperarm_l": Vector3(0.35, -0.55, 0.75), "lowerarm_l": Vector3(0.0, 0.1, 1.0)}],
-		[0.14, {"hips": 0.12, "twist": 0.06, "lean": 0.14, "pitch": 0.04, "shift": Vector3(0.01, 0.0, 0.07), "sink": 0.05,
-			"upperarm_r": Vector3(-0.08, 0.35, 0.93), "lowerarm_r": Vector3(0.15, 0.05, 0.99), "blade_r": Vector3(0.08, 0.25, 0.96),
-			"upperarm_l": Vector3(0.45, -0.8, 0.3), "lowerarm_l": Vector3(0.15, -0.4, 0.9)}],
-		[0.2, {"hips": 0.26, "twist": 0.12, "lean": 0.28, "pitch": 0.08, "shift": Vector3(0.02, 0.0, 0.12), "sink": 0.075,
-			"upperarm_r": Vector3(-0.03, -0.2, 0.98), "lowerarm_r": Vector3(0.2, -0.6, 0.78), "blade_r": Vector3(0.1, -0.45, 0.89),
-			"upperarm_l": Vector3(0.5, -0.85, -0.05), "lowerarm_l": Vector3(0.3, -0.65, 0.7)}],
-		[0.3, {"hips": 0.3, "twist": 0.15, "lean": 0.34, "pitch": 0.1, "shift": Vector3(0.02, 0.0, 0.14), "sink": 0.09,
-			"upperarm_r": Vector3(0.0, -0.7, 0.7), "lowerarm_r": Vector3(0.2, -0.9, 0.4), "blade_r": Vector3(0.12, -0.85, 0.5),
-			"upperarm_l": Vector3(0.5, -0.8, -0.3), "lowerarm_l": Vector3(0.35, -0.75, 0.55)}],
+		[0.0, {"hips": -0.1, "twist": -0.1, "lean": -0.04, "shift": Vector3(0.0, 0.0, -0.02),
+			"hold_r": Vector3(-0.2, 1.12, 0.24), "blade_r": Vector3(0.1, 0.5, 0.86),
+			"upperarm_l": Vector3(0.3, -0.6, 0.75), "lowerarm_l": Vector3(0.0, 0.0, 1.0)}],
+		[0.305, {"hips": -0.32, "twist": -0.22, "lean": -0.12, "pitch": -0.05, "shift": Vector3(-0.02, 0.0, -0.08), "sink": 0.02,
+			"shrug_r": 0.12, "reach_r": -0.1,
+			"hold_r": Vector3(-0.3, 1.58, -0.1), "blade_r": Vector3(0.05, 0.3, -0.95),
+			"upperarm_l": Vector3(0.3, -0.2, 0.93), "lowerarm_l": Vector3(0.05, 0.15, 0.99)}],
+		[0.38, {"hips": -0.05, "twist": 0.0, "lean": 0.06, "shift": Vector3(0.0, 0.0, 0.03), "sink": 0.03,
+			"shrug_r": 0.1, "reach_r": 0.1,
+			"hold_r": Vector3(-0.2, 1.6, 0.22), "blade_r": Vector3(0.05, 0.8, 0.6),
+			"upperarm_l": Vector3(0.35, -0.3, 0.88), "lowerarm_l": Vector3(0.1, -0.1, 0.99)}],
+		[0.477, {"hips": 0.3, "twist": 0.15, "lean": 0.32, "pitch": 0.08, "shift": Vector3(0.02, 0.0, 0.15), "sink": 0.08,
+			"reach_r": 0.32,
+			"hold_r": Vector3(-0.1, 1.25, 0.62), "blade_r": Vector3(0.08, -0.3, 0.95),
+			"upperarm_l": Vector3(0.45, -0.85, -0.25), "lowerarm_l": Vector3(0.3, -0.6, 0.75)}],
+		[0.643, {"hips": 0.4, "twist": 0.22, "lean": 0.42, "pitch": 0.12, "shift": Vector3(0.03, 0.0, 0.19), "sink": 0.12,
+			"reach_r": 0.32,
+			"hold_r": Vector3(-0.03, 0.95, 0.48), "blade_r": Vector3(0.12, -0.8, 0.58),
+			"upperarm_l": Vector3(0.45, -0.8, -0.4), "lowerarm_l": Vector3(0.35, -0.75, 0.5)}],
 	]
+	# B: the backhand, drawn back past the left hip at chest height and cut across to the right.
 	var backhand := [
-		[0.0, {"hips": 0.3, "twist": 0.5, "lean": 0.1, "shift": Vector3(0.03, 0.0, 0.05), "sink": 0.07,
-			"upperarm_r": Vector3(0.55, 0.0, 0.83), "lowerarm_r": Vector3(0.95, 0.1, -0.1), "blade_r": Vector3(0.5, 0.1, -0.85),
-			"upperarm_l": Vector3(0.5, -0.85, 0.1), "lowerarm_l": Vector3(0.2, -0.7, 0.65)}],
-		[0.06, {"hips": 0.2, "twist": 0.3, "lean": 0.1, "shift": Vector3(0.02, 0.0, 0.05), "sink": 0.08,
-			"upperarm_r": Vector3(0.25, 0.0, 0.97), "lowerarm_r": Vector3(0.7, 0.05, 0.7), "blade_r": Vector3(0.98, 0.08, 0.15),
-			"upperarm_l": Vector3(0.55, -0.8, 0.05), "lowerarm_l": Vector3(0.3, -0.7, 0.6)}],
-		[0.13, {"lean": 0.08, "shift": Vector3(-0.01, 0.0, 0.04), "sink": 0.09,
-			"upperarm_r": Vector3(-0.3, 0.02, 0.95), "lowerarm_r": Vector3(-0.15, 0.02, 0.99), "blade_r": Vector3(-0.25, 0.05, 0.97),
-			"upperarm_l": Vector3(0.65, -0.75, -0.05), "lowerarm_l": Vector3(0.4, -0.7, 0.55)}],
-		[0.185, {"hips": -0.2, "twist": -0.25, "lean": 0.06, "shift": Vector3(-0.03, 0.0, 0.03), "sink": 0.08,
-			"upperarm_r": Vector3(-0.7, 0.0, 0.7), "lowerarm_r": Vector3(-0.7, 0.0, 0.7), "blade_r": Vector3(-0.97, 0.05, 0.2),
-			"upperarm_l": Vector3(0.7, -0.65, -0.2), "lowerarm_l": Vector3(0.55, -0.7, 0.4)}],
-		[0.24, {"hips": -0.3, "twist": -0.45, "lean": 0.05, "shift": Vector3(-0.04, 0.0, 0.02), "sink": 0.07,
-			"upperarm_r": Vector3(-0.9, 0.0, 0.4), "lowerarm_r": Vector3(-0.85, 0.0, 0.1), "blade_r": Vector3(-0.7, 0.05, -0.7),
-			"upperarm_l": Vector3(0.75, -0.6, -0.25), "lowerarm_l": Vector3(0.6, -0.7, 0.35)}],
+		[0.0, {"hips": 0.2, "twist": 0.25, "lean": 0.15, "shift": Vector3(0.02, 0.0, 0.06), "sink": 0.06, "reach_r": 0.15,
+			"hold_r": Vector3(0.12, 1.28, 0.42), "blade_r": Vector3(0.7, 0.1, -0.7), "pole_r": Vector3(-0.2, -0.5, 0.8),
+			"upperarm_l": Vector3(0.45, -0.8, -0.15), "lowerarm_l": Vector3(0.25, -0.55, 0.8)}],
+		[0.285, {"hips": 0.45, "twist": 0.6, "lean": 0.12, "shift": Vector3(0.04, 0.0, 0.0), "sink": 0.08, "reach_r": 0.38, "shrug_r": 0.05,
+			"hold_r": Vector3(0.3, 1.32, 0.3), "blade_r": Vector3(0.4, 0.15, -0.9), "pole_r": Vector3(-0.2, -0.5, 0.8),
+			"upperarm_l": Vector3(0.45, -0.85, -0.2), "lowerarm_l": Vector3(0.15, -0.4, 0.9)}],
+		[0.36, {"hips": 0.25, "twist": 0.3, "lean": 0.12, "shift": Vector3(0.02, 0.0, 0.03), "sink": 0.09, "reach_r": 0.3,
+			"hold_r": Vector3(0.06, 1.32, 0.55), "blade_r": Vector3(0.98, 0.08, 0.15), "pole_r": Vector3(-0.3, -0.6, 0.5),
+			"upperarm_l": Vector3(0.55, -0.8, -0.1), "lowerarm_l": Vector3(0.3, -0.6, 0.72)}],
+		[0.42, {"hips": 0.0, "twist": 0.0, "lean": 0.12, "shift": Vector3(0.0, 0.0, 0.06), "sink": 0.1, "reach_r": 0.15,
+			"hold_r": Vector3(-0.22, 1.32, 0.56), "blade_r": Vector3(-0.25, 0.05, 0.97),
+			"upperarm_l": Vector3(0.7, -0.6, -0.2), "lowerarm_l": Vector3(0.6, -0.4, 0.6)}],
+		[0.497, {"hips": -0.3, "twist": -0.35, "lean": 0.1, "shift": Vector3(-0.04, 0.0, 0.05), "sink": 0.09, "reach_r": -0.1,
+			"hold_r": Vector3(-0.46, 1.3, 0.26), "blade_r": Vector3(-0.97, 0.05, 0.2),
+			"upperarm_l": Vector3(0.8, -0.5, 0.0), "lowerarm_l": Vector3(0.7, -0.3, 0.6)}],
+		[0.606, {"hips": -0.45, "twist": -0.55, "lean": 0.08, "shift": Vector3(-0.05, 0.0, 0.03), "sink": 0.08, "reach_r": -0.2,
+			"hold_r": Vector3(-0.52, 1.26, -0.04), "blade_r": Vector3(-0.65, 0.05, -0.75),
+			"upperarm_l": Vector3(0.85, -0.45, 0.25), "lowerarm_l": Vector3(0.7, -0.2, 0.7)}],
 	]
+	# The forehand (the left hand's B, mirrored): drawn back past the right hip at chest height and
+	# cut across to the left.
 	var forehand := [
-		[0.0, {"hips": -0.3, "twist": -0.5, "lean": 0.05, "shift": Vector3(-0.04, 0.0, 0.02), "sink": 0.07,
-			"upperarm_r": Vector3(-0.85, 0.1, -0.3), "lowerarm_r": Vector3(-0.6, 0.15, -0.75), "blade_r": Vector3(-0.3, 0.15, -0.95),
-			"upperarm_l": Vector3(0.35, -0.55, 0.75), "lowerarm_l": Vector3(0.0, -0.1, 1.0)}],
-		[0.06, {"hips": -0.2, "twist": -0.3, "lean": 0.06, "shift": Vector3(-0.03, 0.0, 0.03), "sink": 0.08,
-			"upperarm_r": Vector3(-0.75, 0.05, 0.4), "lowerarm_r": Vector3(-0.55, 0.05, 0.6), "blade_r": Vector3(-0.98, 0.08, 0.1),
-			"upperarm_l": Vector3(0.45, -0.65, 0.6), "lowerarm_l": Vector3(0.1, -0.3, 0.95)}],
-		[0.13, {"lean": 0.08, "shift": Vector3(-0.01, 0.0, 0.04), "sink": 0.09,
-			"upperarm_r": Vector3(-0.3, 0.0, 0.95), "lowerarm_r": Vector3(0.15, 0.0, 0.99), "blade_r": Vector3(0.4, 0.02, 0.92),
-			"upperarm_l": Vector3(0.6, -0.75, 0.2), "lowerarm_l": Vector3(0.3, -0.6, 0.75)}],
-		[0.185, {"hips": 0.2, "twist": 0.25, "lean": 0.1, "shift": Vector3(0.02, 0.0, 0.05), "sink": 0.08,
-			"upperarm_r": Vector3(0.05, -0.02, 1.0), "lowerarm_r": Vector3(0.65, -0.02, 0.75), "blade_r": Vector3(0.97, 0.0, 0.2),
-			"upperarm_l": Vector3(0.65, -0.7, -0.1), "lowerarm_l": Vector3(0.45, -0.7, 0.55)}],
-		[0.24, {"hips": 0.3, "twist": 0.45, "lean": 0.1, "shift": Vector3(0.03, 0.0, 0.05), "sink": 0.07,
-			"upperarm_r": Vector3(0.35, -0.05, 0.93), "lowerarm_r": Vector3(0.9, -0.05, 0.4), "blade_r": Vector3(0.85, 0.0, -0.5),
-			"upperarm_l": Vector3(0.7, -0.6, -0.3), "lowerarm_l": Vector3(0.5, -0.7, 0.45)}],
+		[0.0, {"hips": -0.2, "twist": -0.25, "lean": 0.06, "shift": Vector3(-0.02, 0.0, 0.02), "sink": 0.05, "reach_r": -0.1,
+			"hold_r": Vector3(-0.42, 1.25, 0.3), "blade_r": Vector3(-0.6, 0.15, 0.78),
+			"upperarm_l": Vector3(0.3, -0.5, 0.8), "lowerarm_l": Vector3(-0.1, -0.05, 0.99)}],
+		[0.285, {"hips": -0.45, "twist": -0.6, "lean": 0.06, "shift": Vector3(-0.05, 0.0, 0.0), "sink": 0.07, "reach_r": -0.2, "shrug_r": 0.05,
+			"hold_r": Vector3(-0.5, 1.3, -0.05), "blade_r": Vector3(-0.3, 0.2, -0.93),
+			"upperarm_l": Vector3(0.25, -0.4, 0.88), "lowerarm_l": Vector3(-0.25, -0.05, 0.97)}],
+		[0.36, {"hips": -0.25, "twist": -0.3, "lean": 0.08, "shift": Vector3(-0.03, 0.0, 0.03), "sink": 0.08, "reach_r": 0.0,
+			"hold_r": Vector3(-0.45, 1.3, 0.3), "blade_r": Vector3(-0.98, 0.08, 0.1),
+			"upperarm_l": Vector3(0.4, -0.65, 0.6), "lowerarm_l": Vector3(0.1, -0.3, 0.95)}],
+		[0.42, {"hips": 0.0, "twist": 0.0, "lean": 0.12, "shift": Vector3(0.0, 0.0, 0.06), "sink": 0.09, "reach_r": 0.25,
+			"hold_r": Vector3(-0.15, 1.32, 0.58), "blade_r": Vector3(0.4, 0.02, 0.92),
+			"upperarm_l": Vector3(0.55, -0.75, -0.2), "lowerarm_l": Vector3(0.35, -0.6, 0.7)}],
+		[0.497, {"hips": 0.3, "twist": 0.35, "lean": 0.12, "shift": Vector3(0.03, 0.0, 0.05), "sink": 0.09, "reach_r": 0.35,
+			"hold_r": Vector3(0.12, 1.3, 0.5), "blade_r": Vector3(0.97, 0.0, 0.2), "pole_r": Vector3(-0.3, -0.6, 0.5),
+			"upperarm_l": Vector3(0.65, -0.7, -0.25), "lowerarm_l": Vector3(0.45, -0.7, 0.55)}],
+		[0.606, {"hips": 0.45, "twist": 0.55, "lean": 0.12, "shift": Vector3(0.04, 0.0, 0.05), "sink": 0.08, "reach_r": 0.4,
+			"hold_r": Vector3(0.28, 1.28, 0.28), "blade_r": Vector3(0.8, 0.0, -0.6), "pole_r": Vector3(-0.2, -0.5, 0.8),
+			"upperarm_l": Vector3(0.7, -0.6, -0.35), "lowerarm_l": Vector3(0.55, -0.7, 0.4)}],
 	]
+	# C: drawn back beside the right ear, cut from high on the right down across to low on the left
+	# with a step into it.
 	var c := [
-		[0.0, {"hips": -0.3, "twist": -0.45, "lean": -0.08, "shift": Vector3(-0.02, 0.0, -0.05), "sink": 0.03,
-			"upperarm_r": Vector3(-0.7, 0.65, -0.2), "lowerarm_r": Vector3(-0.2, 0.85, -0.45), "blade_r": Vector3(-0.35, 0.55, -0.75),
-			"upperarm_l": Vector3(0.3, -0.45, 0.85), "lowerarm_l": Vector3(-0.1, 0.1, 1.0)}],
-		[0.11, {"hips": -0.08, "twist": -0.15, "lean": 0.05, "shift": Vector3(0.0, 0.0, 0.03), "sink": 0.05, "step": Vector3(0.0, 0.06, 0.1),
-			"upperarm_r": Vector3(-0.45, 0.5, 0.72), "lowerarm_r": Vector3(-0.05, 0.45, 0.9), "blade_r": Vector3(0.15, 0.8, 0.55),
-			"upperarm_l": Vector3(0.4, -0.6, 0.65), "lowerarm_l": Vector3(0.05, -0.15, 1.0)}],
-		[0.2, {"hips": 0.22, "twist": 0.2, "lean": 0.22, "pitch": 0.06, "shift": Vector3(0.03, 0.0, 0.15), "sink": 0.13, "step": Vector3(0.0, 0.0, 0.2),
-			"upperarm_r": Vector3(-0.1, 0.0, 1.0), "lowerarm_r": Vector3(0.35, -0.3, 0.88), "blade_r": Vector3(0.55, -0.45, 0.7),
-			"upperarm_l": Vector3(0.55, -0.8, 0.1), "lowerarm_l": Vector3(0.3, -0.6, 0.75)}],
-		[0.32, {"hips": 0.35, "twist": 0.45, "lean": 0.3, "pitch": 0.1, "shift": Vector3(0.03, 0.0, 0.18), "sink": 0.16, "step": Vector3(0.0, 0.0, 0.2),
-			"upperarm_r": Vector3(0.3, -0.55, 0.78), "lowerarm_r": Vector3(0.75, -0.6, 0.3), "blade_r": Vector3(0.75, -0.65, -0.1),
-			"upperarm_l": Vector3(0.6, -0.7, -0.35), "lowerarm_l": Vector3(0.45, -0.75, 0.5)}],
+		[0.0, {"hips": -0.3, "twist": -0.35, "lean": 0.0, "shift": Vector3(-0.02, 0.0, 0.0), "sink": 0.04, "shrug_r": 0.08,
+			"hold_r": Vector3(-0.42, 1.45, -0.05), "blade_r": Vector3(-0.5, 0.5, -0.7),
+			"upperarm_l": Vector3(0.4, -0.6, 0.7), "lowerarm_l": Vector3(0.0, -0.1, 1.0)}],
+		[0.34, {"hips": -0.5, "twist": -0.6, "lean": -0.1, "pitch": -0.04, "shift": Vector3(-0.04, 0.0, -0.08), "sink": 0.03,
+			"shrug_r": 0.12, "reach_r": -0.15,
+			"hold_r": Vector3(-0.36, 1.58, -0.2), "blade_r": Vector3(-0.3, 0.3, -0.9),
+			"upperarm_l": Vector3(0.25, 0.05, 0.97), "lowerarm_l": Vector3(-0.1, 0.15, 0.98)}],
+		[0.445, {"hips": -0.2, "twist": -0.2, "lean": 0.05, "shift": Vector3(0.0, 0.0, 0.04), "sink": 0.05, "step": Vector3(0.0, 0.08, 0.12),
+			"shrug_r": 0.08, "reach_r": 0.1,
+			"hold_r": Vector3(-0.32, 1.58, 0.25), "blade_r": Vector3(0.15, 0.85, 0.5),
+			"upperarm_l": Vector3(0.35, -0.4, 0.85), "lowerarm_l": Vector3(0.05, -0.2, 0.98)}],
+		[0.55, {"hips": 0.3, "twist": 0.25, "lean": 0.3, "pitch": 0.08, "shift": Vector3(0.03, 0.0, 0.2), "sink": 0.15, "step": Vector3(0.0, 0.0, 0.3),
+			"reach_r": 0.35,
+			"hold_r": Vector3(-0.16, 1.28, 0.7), "blade_r": Vector3(0.55, -0.45, 0.7),
+			"upperarm_l": Vector3(0.55, -0.8, -0.15), "lowerarm_l": Vector3(0.35, -0.6, 0.72)}],
+		[0.724, {"hips": 0.5, "twist": 0.55, "lean": 0.38, "pitch": 0.12, "shift": Vector3(0.04, 0.0, 0.24), "sink": 0.18, "step": Vector3(0.0, 0.0, 0.3),
+			"reach_r": 0.4,
+			"hold_r": Vector3(0.24, 1.02, 0.6), "blade_r": Vector3(0.75, -0.65, -0.15), "pole_r": Vector3(-0.3, -0.6, 0.5),
+			"upperarm_l": Vector3(0.6, -0.65, -0.45), "lowerarm_l": Vector3(0.45, -0.75, 0.5)}],
 	]
 	# The last blow holds its end for a moment, then the front foot steps back under the body
-	# while the arms stay where the cut left them.
-	var spent: Dictionary = c[3][1]
-	c.append([0.41, spent])
-	c.append([0.48, _with(spent, {"hips": 0.22, "lean": 0.2, "pitch": 0.06, "shift": Vector3(0.02, 0.0, 0.1), "sink": 0.1, "step": Vector3(0.0, 0.05, 0.1)})])
-	c.append([0.55, _with(spent, {"hips": 0.1, "lean": 0.1, "pitch": 0.02, "shift": Vector3(0.0, 0.0, 0.03), "sink": 0.04, "step": Vector3.ZERO})])
+	# and the sword comes back toward the guard.
+	var spent: Dictionary = c[4][1]
+	c.append([0.866, spent])
+	c.append([1.008, _with(spent, {"hips": 0.3, "twist": 0.35, "lean": 0.22, "pitch": 0.06, "shift": Vector3(0.02, 0.0, 0.12), "sink": 0.11, "step": Vector3(0.0, 0.05, 0.12),
+		"hold_r": Vector3(0.12, 1.06, 0.5), "blade_r": Vector3(0.6, -0.3, 0.75)})])
+	c.append([1.15, _with(spent, {"hips": 0.12, "twist": 0.15, "lean": 0.1, "pitch": 0.02, "shift": Vector3(0.0, 0.0, 0.03), "sink": 0.04, "step": Vector3.ZERO, "reach_r": 0.15,
+		"hold_r": Vector3(-0.08, 1.1, 0.36), "blade_r": Vector3(0.2, 0.2, 0.96), "pole_r": Vector3.ZERO})])
 	# The first blow made off the ground: the body arches back with the weapon high and the legs
 	# trailing, then folds forward and brings the weapon down as the knees come up in front and
 	# the legs reach for the ground. Here the legs are not held by the feet; each thigh and shin
 	# points the way given.
 	var air := [
 		[0.0, {"hips": -0.15, "pitch": -0.12, "twist": -0.2, "lean": -0.3,
-			"upperarm_r": Vector3(-0.35, 0.9, -0.15), "lowerarm_r": Vector3(0.15, 0.6, -0.78), "blade_r": Vector3(0.05, 0.35, -0.93),
+			"hold_r": Vector3(-0.3, 1.6, -0.12), "blade_r": Vector3(0.05, 0.35, -0.93),
 			"upperarm_l": Vector3(0.3, 0.3, 0.9), "lowerarm_l": Vector3(0.0, 0.5, 0.87),
 			"thigh_r": Vector3(-0.08, -0.9, -0.42), "calf_r": Vector3(0.0, -0.3, -0.95),
 			"thigh_l": Vector3(0.1, -0.97, 0.2), "calf_l": Vector3(0.0, -0.55, -0.83)}],
-		[0.07, {"hips": -0.08, "pitch": -0.08, "twist": -0.12, "lean": -0.2,
-			"upperarm_r": Vector3(-0.15, 0.85, 0.5), "lowerarm_r": Vector3(0.12, 0.8, 0.58), "blade_r": Vector3(0.08, 0.99, 0.1),
+		[0.23, {"hips": -0.08, "pitch": -0.08, "twist": -0.12, "lean": -0.2,
+			"hold_r": Vector3(-0.22, 1.64, 0.2), "blade_r": Vector3(0.08, 0.95, 0.3),
 			"upperarm_l": Vector3(0.35, 0.05, 0.93), "lowerarm_l": Vector3(0.05, 0.3, 0.95),
 			"thigh_r": Vector3(-0.08, -0.95, -0.3), "calf_r": Vector3(0.0, -0.35, -0.94),
 			"thigh_l": Vector3(0.1, -0.9, 0.42), "calf_l": Vector3(0.0, -0.6, -0.8)}],
-		[0.13, {"hips": 0.08, "pitch": 0.08, "twist": 0.05, "lean": 0.15,
-			"upperarm_r": Vector3(-0.08, 0.3, 0.95), "lowerarm_r": Vector3(0.15, 0.0, 0.99), "blade_r": Vector3(0.08, 0.2, 0.97),
+		[0.32, {"hips": 0.08, "pitch": 0.08, "twist": 0.05, "lean": 0.15,
+			"hold_r": Vector3(-0.15, 1.48, 0.5), "blade_r": Vector3(0.08, 0.2, 0.97),
 			"upperarm_l": Vector3(0.45, -0.5, 0.55), "lowerarm_l": Vector3(0.2, -0.3, 0.93),
 			"thigh_r": Vector3(-0.1, -0.85, 0.3), "calf_r": Vector3(0.0, -0.7, -0.7),
 			"thigh_l": Vector3(0.1, -0.7, 0.7), "calf_l": Vector3(0.0, -0.8, -0.6)}],
-		[0.19, {"hips": 0.2, "pitch": 0.2, "twist": 0.15, "lean": 0.42,
-			"upperarm_r": Vector3(-0.03, -0.3, 0.95), "lowerarm_r": Vector3(0.2, -0.68, 0.7), "blade_r": Vector3(0.1, -0.55, 0.83),
+		[0.41, {"hips": 0.2, "pitch": 0.2, "twist": 0.15, "lean": 0.42,
+			"hold_r": Vector3(-0.1, 1.2, 0.6), "blade_r": Vector3(0.1, -0.55, 0.83),
 			"upperarm_l": Vector3(0.55, -0.75, -0.2), "lowerarm_l": Vector3(0.35, -0.7, 0.6),
 			"thigh_r": Vector3(-0.12, -0.6, 0.79), "calf_r": Vector3(-0.03, -0.88, -0.47),
 			"thigh_l": Vector3(0.12, -0.45, 0.88), "calf_l": Vector3(0.03, -0.8, -0.6)}],
-		[0.3, {"hips": 0.22, "pitch": 0.2, "twist": 0.2, "lean": 0.5,
-			"upperarm_r": Vector3(0.0, -0.78, 0.63), "lowerarm_r": Vector3(0.2, -0.93, 0.3), "blade_r": Vector3(0.12, -0.9, 0.42),
+		[0.571, {"hips": 0.22, "pitch": 0.2, "twist": 0.2, "lean": 0.5,
+			"hold_r": Vector3(-0.05, 1.0, 0.5), "blade_r": Vector3(0.12, -0.9, 0.42),
 			"upperarm_l": Vector3(0.55, -0.7, -0.45), "lowerarm_l": Vector3(0.4, -0.8, 0.45),
 			"thigh_r": Vector3(-0.1, -0.9, 0.42), "calf_r": Vector3(-0.02, -0.98, -0.2),
 			"thigh_l": Vector3(0.12, -0.8, 0.6), "calf_l": Vector3(0.02, -0.95, -0.3)}],
@@ -1557,6 +1980,537 @@ static func _blow_keys(side: String) -> Dictionary:
 		if float(keys[keys.size() - 1][0]) < length - 0.001:
 			keys.append([length, keys[keys.size() - 1][1]])
 	return out
+
+
+## The blows of every weapon that is not a sword (STYLE_OF), for the right hand; the left hand's are
+## these mirrored. Each pose puts the fist where it should be ("hold_r", model space: +Z ahead, -X
+## the figure's right, metres from the feet) and points what it holds ("blade_r": the way its
+## head or point faces). The rest is as in _blow_keys: the hips, chest and legs, and the left arm
+## guarding (GUARD_L), held back for balance (BALANCE_L), raised (RAISED_L), out to the side
+## (OUT_L) or reaching ahead (REACH_L).
+##   dagger    A: a straight stab at the chest; B: a stab driven up from low at the right hip;
+##             C: an overhand stab brought down from above the shoulder, stepping in.
+##   sickle    A: from behind the head, as the Egyptians drew the khopesh, cut down in front;
+##             B: the hook: reached out to the left and drawn back hard to the right;
+##             C: a low sweep at the legs from right to left, crouching and stepping in.
+##   axe       A: chopped down across from over the right shoulder; B: a level chop from the
+##             right at the waist; C: raised high behind the head and brought straight down.
+##   bludgeon  (club and mace) A: lifted straight up and slammed down on both feet; B: swung up
+##             from the left hip to high on the right; C: a wide swing at head height, turning
+##             the whole body round and stepping in.
+##   spear     A: thrust from the hip; B: raised over the shoulder and thrust down; C: a long
+##             lunge, all the reach of the arm and the step.
+##   staff     one blow: held near its top, the right hand above the left; drawn back over the
+##             right shoulder, a moment's pause to gather, then the butt driven forward and down.
+##             "air" is the same off the ground.
+static func _style_keys(style: String) -> Dictionary:
+	var out := {}
+	match style:
+		"dagger":
+			var ready := _with(GUARD_L, {"hold_r": Vector3(-0.16, 1.12, 0.3), "blade_r": Vector3(0.0, 0.2, 0.98)})
+			var stab := _with(BALANCE_L, {"hips": 0.2, "twist": 0.25, "lean": 0.2, "pitch": 0.04, "shift": Vector3(0.0, 0.0, 0.12), "sink": 0.06,
+				"step": Vector3(0.0, 0.0, 0.15), "reach_r": 0.3, "hold_r": Vector3(-0.06, 1.25, 0.6), "blade_r": Vector3(0.04, 0.0, 1.0)})
+			var back := _with(GUARD_L, {"hips": 0.05, "twist": 0.05, "lean": 0.05, "shift": Vector3(0.0, 0.0, 0.04), "sink": 0.02,
+				"hold_r": Vector3(-0.14, 1.12, 0.35), "blade_r": Vector3(0.0, 0.15, 0.99)})
+			out["a"] = [
+				[0.0, ready],
+				[0.18, _with(GUARD_L, {"hips": -0.2, "twist": -0.3, "lean": -0.05, "shift": Vector3(-0.02, 0.0, -0.04), "sink": 0.03, "shrug_r": 0.05,
+					"hold_r": Vector3(-0.26, 1.1, 0.0), "blade_r": Vector3(0.05, 0.1, 0.99)})],
+				[0.32, stab],
+				[0.42, _with(stab, {"hold_r": Vector3(-0.06, 1.25, 0.63)})],
+				[0.6, back],
+			]
+			var rise := _with(BALANCE_L, {"hips": 0.25, "twist": 0.3, "lean": 0.18, "sink": 0.04, "shift": Vector3(0.0, 0.0, 0.1), "step": Vector3(0.0, 0.0, 0.12),
+				"reach_r": 0.25, "hold_r": Vector3(-0.04, 1.18, 0.55), "blade_r": Vector3(0.0, 0.62, 0.78)})
+			out["b"] = [
+				[0.0, back],
+				[0.16, _with(GUARD_L, {"hips": -0.25, "twist": -0.35, "lean": 0.05, "sink": 0.08, "shift": Vector3(-0.02, 0.0, -0.02),
+					"hold_r": Vector3(-0.28, 0.95, 0.08), "blade_r": Vector3(0.05, 0.55, 0.83)})],
+				[0.3, rise],
+				[0.4, _with(rise, {"hold_r": Vector3(-0.02, 1.3, 0.55), "blade_r": Vector3(0.0, 0.8, 0.6)})],
+				[0.6, back],
+			]
+			var down := _with(BALANCE_L, {"hips": 0.25, "twist": 0.2, "lean": 0.32, "pitch": 0.07, "sink": 0.12, "shift": Vector3(0.02, 0.0, 0.18),
+				"step": Vector3(0.0, 0.0, 0.25), "reach_r": 0.3, "hold_r": Vector3(-0.06, 1.22, 0.5), "blade_r": Vector3(0.0, -0.6, 0.8)})
+			var spent := _with(down, {"hold_r": Vector3(-0.03, 1.05, 0.48), "blade_r": Vector3(0.0, -0.85, 0.5)})
+			out["c"] = [
+				[0.0, back],
+				[0.22, _with(RAISED_L, {"hips": -0.2, "twist": -0.25, "lean": -0.12, "shrug_r": 0.25, "shift": Vector3(-0.02, 0.0, -0.05),
+					"hold_r": Vector3(-0.24, 1.7, -0.02), "blade_r": Vector3(0.0, 0.75, 0.65)})],
+				[0.38, down],
+				[0.5, spent],
+				[0.62, spent],
+				[0.74, _with(spent, {"hips": 0.1, "twist": 0.1, "lean": 0.12, "pitch": 0.02, "sink": 0.05, "shift": Vector3(0.0, 0.0, 0.06), "step": Vector3(0.0, 0.05, 0.1)})],
+				[0.85, _with(back, {"step": Vector3.ZERO})],
+			]
+		"sickle":
+			var ready := _with(GUARD_L, {"hold_r": Vector3(-0.18, 1.15, 0.3), "blade_r": Vector3(0.0, 0.6, 0.8)})
+			var cut := _with(BALANCE_L, {"hips": 0.3, "twist": 0.2, "lean": 0.3, "pitch": 0.06, "sink": 0.08, "shift": Vector3(0.02, 0.0, 0.15), "reach_r": 0.3,
+				"hold_r": Vector3(-0.1, 1.3, 0.5), "blade_r": Vector3(0.05, -0.45, 0.9)})
+			var after_a := _with(cut, {"hips": 0.38, "twist": 0.28, "lean": 0.38, "pitch": 0.1, "sink": 0.11, "shift": Vector3(0.03, 0.0, 0.18),
+				"hold_r": Vector3(-0.05, 1.02, 0.42), "blade_r": Vector3(0.1, -0.85, 0.5)})
+			out["a"] = [
+				[0.0, ready],
+				[0.32, _with(RAISED_L, {"hips": -0.2, "twist": -0.25, "lean": -0.15, "shrug_r": 0.3, "shift": Vector3(-0.02, 0.0, -0.06),
+					"hold_r": Vector3(-0.14, 1.74, -0.08), "blade_r": Vector3(0.1, 0.15, -0.98)})],
+				[0.43, _with(GUARD_L, {"lean": 0.05, "shrug_r": 0.2, "hold_r": Vector3(-0.12, 1.7, 0.25), "blade_r": Vector3(0.05, 0.95, 0.3)})],
+				[0.5, cut],
+				[0.65, after_a],
+			]
+			var pulled := _with(BALANCE_L, {"hips": -0.25, "twist": -0.3, "lean": 0.08, "shift": Vector3(-0.03, 0.0, 0.04), "sink": 0.07,
+				"hold_r": Vector3(-0.3, 1.2, 0.28), "blade_r": Vector3(0.7, 0.05, 0.71)})
+			var after_b := _with(pulled, {"hips": -0.35, "twist": -0.42, "lean": 0.05, "sink": 0.06,
+				"hold_r": Vector3(-0.38, 1.12, 0.1), "blade_r": Vector3(0.25, -0.2, 0.95)})
+			out["b"] = [
+				[0.0, after_a],
+				[0.28, _with(REACH_L, {"hips": 0.25, "twist": 0.35, "lean": 0.15, "shift": Vector3(0.02, 0.0, 0.08), "sink": 0.05, "reach_r": 0.35,
+					"hold_r": Vector3(0.14, 1.3, 0.55), "blade_r": Vector3(0.9, 0.1, 0.42)})],
+				[0.45, pulled],
+				[0.58, after_b],
+			]
+			var sweep := _with(BALANCE_L, {"hips": 0.35, "twist": 0.3, "lean": 0.38, "pitch": 0.1, "sink": 0.22, "shift": Vector3(0.02, 0.0, 0.2),
+				"step": Vector3(0.0, 0.0, 0.3), "reach_r": 0.3, "hold_r": Vector3(0.0, 0.88, 0.5), "blade_r": Vector3(0.45, -0.55, 0.7)})
+			var spent := _with(sweep, {"hips": 0.5, "twist": 0.55, "sink": 0.2, "shift": Vector3(0.03, 0.0, 0.2),
+				"hold_r": Vector3(0.25, 0.92, 0.35), "blade_r": Vector3(0.85, -0.4, 0.34)})
+			out["c"] = [
+				[0.0, after_b],
+				[0.34, _with(OUT_L, {"hips": -0.45, "twist": -0.55, "sink": 0.08, "shift": Vector3(-0.03, 0.0, -0.03),
+					"hold_r": Vector3(-0.45, 1.05, -0.12), "blade_r": Vector3(-0.6, -0.3, -0.74)})],
+				[0.47, _with(OUT_L, {"hips": -0.1, "twist": -0.1, "lean": 0.3, "sink": 0.18, "shift": Vector3(0.0, 0.0, 0.15), "step": Vector3(0.0, 0.0, 0.25),
+					"hold_r": Vector3(-0.3, 0.92, 0.42), "blade_r": Vector3(-0.3, -0.55, 0.78)})],
+				[0.55, sweep],
+				[0.7, spent],
+				[0.86, spent],
+				[1.0, _with(spent, {"hips": 0.3, "twist": 0.35, "lean": 0.2, "pitch": 0.05, "sink": 0.1, "shift": Vector3(0.02, 0.0, 0.1), "step": Vector3(0.0, 0.05, 0.12)})],
+				[1.15, _with(ready, {"hips": 0.1, "twist": 0.15, "lean": 0.08, "sink": 0.04, "shift": Vector3(0.0, 0.0, 0.03)})],
+			]
+		"axe":
+			var ready := _with(GUARD_L, {"hold_r": Vector3(-0.2, 1.12, 0.3), "blade_r": Vector3(0.0, 0.7, 0.7)})
+			var chop := _with(BALANCE_L, {"hips": 0.3, "twist": 0.2, "lean": 0.32, "pitch": 0.07, "sink": 0.1, "shift": Vector3(0.02, 0.0, 0.16), "reach_r": 0.3,
+				"hold_r": Vector3(-0.03, 1.25, 0.5), "blade_r": Vector3(0.35, -0.45, 0.82)})
+			var after_a := _with(chop, {"hips": 0.4, "twist": 0.32, "lean": 0.38, "pitch": 0.1, "sink": 0.12, "shift": Vector3(0.03, 0.0, 0.18),
+				"hold_r": Vector3(0.1, 1.0, 0.4), "blade_r": Vector3(0.55, -0.75, 0.36)})
+			out["a"] = [
+				[0.0, ready],
+				[0.36, _with(RAISED_L, {"hips": -0.3, "twist": -0.4, "lean": -0.12, "shrug_r": 0.25, "shift": Vector3(-0.02, 0.0, -0.06), "sink": 0.02,
+					"hold_r": Vector3(-0.32, 1.62, -0.1), "blade_r": Vector3(-0.2, 0.3, -0.93)})],
+				[0.47, _with(GUARD_L, {"hips": -0.05, "twist": -0.05, "lean": 0.05, "shrug_r": 0.15, "shift": Vector3(0.0, 0.0, 0.03), "sink": 0.04,
+					"hold_r": Vector3(-0.24, 1.62, 0.25), "blade_r": Vector3(0.15, 0.92, 0.36)})],
+				[0.55, chop],
+				[0.72, after_a],
+			]
+			var level := _with(BALANCE_L, {"hips": 0.2, "twist": 0.15, "lean": 0.15, "sink": 0.08, "shift": Vector3(0.02, 0.0, 0.08), "reach_r": 0.3,
+				"hold_r": Vector3(-0.05, 1.13, 0.55), "blade_r": Vector3(0.4, 0.0, 0.92)})
+			var after_b := _with(level, {"hips": 0.45, "twist": 0.55, "lean": 0.12, "sink": 0.07, "shift": Vector3(0.03, 0.0, 0.06), "reach_r": 0.35,
+				"hold_r": Vector3(0.25, 1.13, 0.35), "blade_r": Vector3(0.95, 0.0, 0.3)})
+			out["b"] = [
+				[0.0, after_a],
+				[0.32, _with(OUT_L, {"hips": -0.45, "twist": -0.6, "lean": 0.04, "shift": Vector3(-0.04, 0.0, 0.0), "sink": 0.05,
+					"hold_r": Vector3(-0.48, 1.18, -0.04), "blade_r": Vector3(-0.75, 0.12, -0.65)})],
+				[0.42, _with(OUT_L, {"hips": -0.15, "twist": -0.2, "lean": 0.1, "sink": 0.07, "shift": Vector3(0.0, 0.0, 0.04),
+					"hold_r": Vector3(-0.36, 1.15, 0.4), "blade_r": Vector3(-0.6, 0.05, 0.8)})],
+				[0.5, level],
+				[0.64, after_b],
+			]
+			var fall := _with(BALANCE_L, {"hips": 0.25, "twist": 0.1, "lean": 0.42, "pitch": 0.12, "sink": 0.18, "shift": Vector3(0.02, 0.0, 0.22),
+				"step": Vector3(0.0, 0.0, 0.32), "reach_r": 0.3, "hold_r": Vector3(-0.08, 1.12, 0.55), "blade_r": Vector3(0.05, -0.6, 0.8)})
+			var spent := _with(fall, {"lean": 0.46, "hold_r": Vector3(-0.05, 0.92, 0.5), "blade_r": Vector3(0.05, -0.9, 0.42)})
+			out["c"] = [
+				[0.0, after_b],
+				[0.42, _with(RAISED_L, {"hips": -0.25, "twist": -0.15, "lean": -0.25, "pitch": -0.05, "shrug_r": 0.35, "shift": Vector3(0.0, 0.0, -0.08),
+					"hold_r": Vector3(-0.16, 1.82, -0.15), "blade_r": Vector3(0.0, 0.15, -0.99)})],
+				[0.54, _with(GUARD_L, {"hips": -0.05, "lean": 0.0, "shrug_r": 0.25, "sink": 0.04, "shift": Vector3(0.0, 0.0, 0.04), "step": Vector3(0.0, 0.08, 0.15),
+					"hold_r": Vector3(-0.13, 1.78, 0.28), "blade_r": Vector3(0.0, 0.92, 0.4)})],
+				[0.62, fall],
+				[0.8, spent],
+				[0.98, spent],
+				[1.14, _with(spent, {"hips": 0.12, "twist": 0.05, "lean": 0.25, "pitch": 0.06, "sink": 0.1, "shift": Vector3(0.0, 0.0, 0.1), "step": Vector3(0.0, 0.05, 0.14)})],
+				[1.3, _with(ready, {"lean": 0.08, "sink": 0.04, "shift": Vector3(0.0, 0.0, 0.03)})],
+			]
+		"bludgeon":
+			var ready := _with(GUARD_L, {"hold_r": Vector3(-0.2, 1.15, 0.3), "blade_r": Vector3(0.0, 0.8, 0.6)})
+			var slam := _with(BALANCE_L, {"hips": 0.15, "twist": 0.08, "lean": 0.45, "pitch": 0.12, "sink": 0.2, "shift": Vector3(0.0, 0.0, 0.12), "reach_r": 0.25,
+				"hold_r": Vector3(-0.1, 1.08, 0.5), "blade_r": Vector3(0.0, -0.75, 0.66)})
+			var after_a := _with(slam, {"lean": 0.48, "pitch": 0.13, "sink": 0.21, "shift": Vector3(0.0, 0.0, 0.13),
+				"hold_r": Vector3(-0.1, 0.95, 0.48), "blade_r": Vector3(0.0, -0.9, 0.42)})
+			out["a"] = [
+				[0.0, ready],
+				[0.36, _with(RAISED_L, {"hips": -0.15, "twist": -0.1, "lean": -0.2, "pitch": -0.05, "shrug_r": 0.35, "shift": Vector3(0.0, 0.0, -0.05),
+					"hold_r": Vector3(-0.18, 1.86, 0.0), "blade_r": Vector3(0.0, 0.55, -0.84)})],
+				[0.47, _with(GUARD_L, {"lean": 0.05, "shrug_r": 0.25, "sink": 0.05, "hold_r": Vector3(-0.16, 1.8, 0.3), "blade_r": Vector3(0.0, 0.95, 0.3)})],
+				[0.55, slam],
+				[0.72, after_a],
+			]
+			var upper := _with(BALANCE_L, {"hips": -0.25, "twist": -0.3, "lean": -0.05, "sink": 0.03, "shift": Vector3(0.0, 0.0, 0.05), "reach_r": 0.15,
+				"hold_r": Vector3(-0.15, 1.45, 0.45), "blade_r": Vector3(-0.35, 0.75, 0.56)})
+			var after_b := _with(upper, {"hips": -0.4, "twist": -0.5, "lean": -0.08, "sink": 0.02, "shrug_r": 0.15,
+				"hold_r": Vector3(-0.35, 1.6, 0.15), "blade_r": Vector3(-0.6, 0.75, -0.27)})
+			out["b"] = [
+				[0.0, after_a],
+				[0.3, _with(OUT_L, {"hips": 0.35, "twist": 0.45, "lean": 0.15, "sink": 0.1,
+					"hold_r": Vector3(0.12, 0.98, 0.18), "blade_r": Vector3(0.6, -0.55, -0.58)})],
+				[0.48, upper],
+				[0.6, after_b],
+			]
+			var swing := _with(BALANCE_L, {"hips": 0.4, "twist": 0.3, "lean": 0.2, "sink": 0.1, "shift": Vector3(0.02, 0.0, 0.16), "step": Vector3(0.0, 0.0, 0.28),
+				"reach_r": 0.3, "hold_r": Vector3(0.0, 1.38, 0.55), "blade_r": Vector3(0.45, 0.05, 0.89)})
+			var spent := _with(swing, {"hips": 0.6, "twist": 0.7, "lean": 0.18, "reach_r": 0.35,
+				"hold_r": Vector3(0.3, 1.3, 0.3), "blade_r": Vector3(0.95, -0.1, 0.28)})
+			out["c"] = [
+				[0.0, after_b],
+				[0.42, _with(OUT_L, {"hips": -0.5, "twist": -0.65, "shift": Vector3(-0.04, 0.0, -0.02), "sink": 0.04,
+					"hold_r": Vector3(-0.5, 1.45, -0.15), "blade_r": Vector3(-0.6, 0.3, -0.74)})],
+				[0.54, _with(OUT_L, {"hips": -0.15, "twist": -0.2, "lean": 0.1, "sink": 0.07, "shift": Vector3(0.0, 0.0, 0.06), "step": Vector3(0.0, 0.06, 0.18),
+					"hold_r": Vector3(-0.36, 1.42, 0.42), "blade_r": Vector3(-0.5, 0.15, 0.85)})],
+				[0.62, swing],
+				[0.78, spent],
+				[0.98, spent],
+				[1.14, _with(spent, {"hips": 0.3, "twist": 0.35, "lean": 0.12, "sink": 0.07, "shift": Vector3(0.01, 0.0, 0.08), "step": Vector3(0.0, 0.05, 0.12)})],
+				[1.3, _with(ready, {"hips": 0.1, "twist": 0.1, "lean": 0.05, "sink": 0.03, "shift": Vector3(0.0, 0.0, 0.03)})],
+			]
+		"spear":
+			var ready := _with(GUARD_L, {"hold_r": Vector3(-0.22, 1.05, 0.15), "blade_r": Vector3(0.04, 0.12, 0.99)})
+			var low := _with(GUARD_L, {"hips": 0.25, "twist": 0.25, "lean": 0.2, "pitch": 0.04, "sink": 0.07, "shift": Vector3(0.0, 0.0, 0.14),
+				"step": Vector3(0.0, 0.0, 0.2), "reach_r": 0.3, "hold_r": Vector3(-0.2, 1.12, 0.5), "blade_r": Vector3(0.03, 0.04, 1.0)})
+			var back := _with(GUARD_L, {"hips": 0.05, "twist": 0.05, "lean": 0.05, "sink": 0.02, "shift": Vector3(0.0, 0.0, 0.04),
+				"hold_r": Vector3(-0.2, 1.05, 0.2), "blade_r": Vector3(0.04, 0.1, 0.99)})
+			out["a"] = [
+				[0.0, ready],
+				[0.28, _with(GUARD_L, {"hips": -0.25, "twist": -0.3, "lean": -0.05, "sink": 0.03, "shift": Vector3(-0.02, 0.0, -0.05),
+					"hold_r": Vector3(-0.27, 1.0, -0.1), "blade_r": Vector3(0.04, 0.12, 0.99)})],
+				[0.45, low],
+				[0.58, _with(low, {"hold_r": Vector3(-0.19, 1.12, 0.54)})],
+				[0.8, back],
+			]
+			var high := _with(GUARD_L, {"hips": 0.2, "twist": 0.25, "lean": 0.2, "sink": 0.05, "shift": Vector3(0.0, 0.0, 0.12), "step": Vector3(0.0, 0.0, 0.15),
+				"shrug_r": 0.15, "reach_r": 0.3, "hold_r": Vector3(-0.24, 1.5, 0.42), "blade_r": Vector3(0.04, -0.35, 0.94)})
+			out["b"] = [
+				[0.0, back],
+				[0.28, _with(GUARD_L, {"hips": -0.2, "twist": -0.25, "lean": -0.08, "shrug_r": 0.25, "shift": Vector3(-0.02, 0.0, -0.04),
+					"hold_r": Vector3(-0.24, 1.66, -0.08), "blade_r": Vector3(0.04, -0.12, 0.99)})],
+				[0.45, high],
+				[0.58, _with(high, {"hold_r": Vector3(-0.23, 1.48, 0.46)})],
+				[0.8, back],
+			]
+			var lunge := _with(GUARD_L, {"hips": 0.35, "twist": 0.35, "lean": 0.3, "pitch": 0.08, "sink": 0.15, "shift": Vector3(0.02, 0.0, 0.25),
+				"step": Vector3(0.0, 0.0, 0.4), "reach_r": 0.4, "hold_r": Vector3(-0.18, 1.2, 0.62), "blade_r": Vector3(0.03, 0.0, 1.0)})
+			var spent := _with(lunge, {"hold_r": Vector3(-0.17, 1.2, 0.65)})
+			out["c"] = [
+				[0.0, back],
+				[0.36, _with(GUARD_L, {"hips": -0.4, "twist": -0.45, "lean": -0.1, "sink": 0.06, "shift": Vector3(-0.03, 0.0, -0.08),
+					"hold_r": Vector3(-0.3, 1.04, -0.18), "blade_r": Vector3(0.04, 0.1, 0.99)})],
+				[0.55, lunge],
+				[0.72, spent],
+				[0.88, spent],
+				[1.02, _with(spent, {"hips": 0.15, "twist": 0.15, "lean": 0.15, "pitch": 0.03, "sink": 0.08, "shift": Vector3(0.0, 0.0, 0.1), "step": Vector3(0.0, 0.05, 0.15),
+					"hold_r": Vector3(-0.2, 1.1, 0.4)})],
+				[1.15, back],
+			]
+			# The shaft runs on behind the fist: it is kept out of the body (see _aimed).
+			for blow in out:
+				for k in out[blow]:
+					k[1] = _with(k[1], {"shaft_back": SPEAR_BACK, "shaft_front": SPEAR_FRONT})
+		"staff":
+			# Held near its top (the fists STAFF_SLIDE further up the shaft than when it is carried),
+			# the right hand above the left, a little more than a shoulder's width apart ("staff":
+			# + toward the butt). "blade_r" is the way the top points: back over the right
+			# shoulder, so the butt is ahead. Drawn back, a moment's pause to gather, and the butt
+			# driven forward and down.
+			var ready := {"hips": -0.15, "twist": -0.25, "hold_r": Vector3(-0.16, 1.28, 0.12), "blade_r": Vector3(-0.25, 0.6, -0.76), "staff": STAFF_GRIP}
+			var drawn := {"hips": -0.25, "twist": -0.35, "lean": -0.12, "shrug_r": 0.2, "shift": Vector3(-0.02, 0.0, -0.07), "sink": 0.03,
+				"hold_r": Vector3(-0.26, 1.56, -0.06), "blade_r": Vector3(-0.25, 0.4, -0.88), "staff": STAFF_GRIP}
+			var gathered := _with(drawn, {"hips": -0.3, "twist": -0.42, "lean": -0.15, "shrug_r": 0.25, "shift": Vector3(-0.02, 0.0, -0.08), "sink": 0.05,
+				"hold_r": Vector3(-0.27, 1.6, -0.1), "blade_r": Vector3(-0.26, 0.42, -0.87)})
+			var driven := {"hips": 0.0, "twist": -0.35, "lean": 0.25, "pitch": 0.06, "sink": 0.1, "shift": Vector3(0.0, 0.0, 0.18),
+				"step": Vector3(0.0, 0.0, 0.28), "reach_r": 0.2, "hold_r": Vector3(-0.22, 1.3, 0.26), "blade_r": Vector3(-0.35, 0.5, -0.79), "staff": STAFF_GRIP}
+			var spent := _with(driven, {"twist": -0.38, "hold_r": Vector3(-0.2, 1.29, 0.24)})
+			out["a"] = [
+				[0.0, ready],
+				[0.28, drawn],
+				[0.42, gathered],
+				[0.55, driven],
+				[0.7, spent],
+				[0.86, spent],
+				[0.96, _with(spent, {"hips": 0.05, "twist": -0.05, "lean": 0.12, "pitch": 0.02, "sink": 0.05, "shift": Vector3(0.0, 0.0, 0.08), "step": Vector3(0.0, 0.05, 0.12)})],
+				[1.05, _with(ready, {"lean": 0.04, "sink": 0.02, "shift": Vector3(0.0, 0.0, 0.03)})],
+			]
+			# Off the ground: the legs of the jump attack, the same blow with the arms.
+			var air: Array = []
+			var leap: Array = _blow_keys("r")["air"]
+			var arms := [ready, drawn, gathered, driven, spent]
+			var times := [0.0, 0.28, 0.42, 0.55, 0.7]
+			for i in leap.size():
+				var pose: Dictionary = (leap[i][1] as Dictionary).duplicate()
+				for part in ["upperarm_r", "lowerarm_r", "upperarm_l", "lowerarm_l", "blade_r"]:
+					pose.erase(part)
+				pose["lean"] = minf(float(pose.get("lean", 0.0)), 0.22)
+				pose["pitch"] = minf(float(pose.get("pitch", 0.0)), 0.1)
+				var hands: Dictionary = arms[mini(i, arms.size() - 1)]
+				for key in ["hold_r", "blade_r", "staff", "shrug_r", "twist", "hips"]:
+					if hands.has(key):
+						pose[key] = hands[key]
+				air.append([times[mini(i, times.size() - 1)], pose])
+			out["air"] = air
+			# The stomp: the staff lifted upright in both hands before the face, held there a
+			# moment, then its butt driven straight down into the ground before the feet, the
+			# knees giving with it.
+			var upright := {"hips": 0.0, "twist": 0.0, "lean": -0.06, "shrug_r": 0.15, "sink": 0.0,
+				"hold_r": Vector3(-0.08, 1.72, 0.3), "blade_r": Vector3(0.0, 1.0, 0.04), "staff": STAFF_GRIP}
+			var lifted := _with(upright, {"lean": -0.1, "shrug_r": 0.3, "hold_r": Vector3(-0.08, 1.86, 0.3)})
+			var struck := {"hips": 0.0, "twist": 0.0, "lean": 0.22, "pitch": 0.05, "sink": 0.2, "shift": Vector3(0.0, 0.0, 0.06),
+				"hold_r": Vector3(-0.08, 1.36, 0.36), "blade_r": Vector3(0.0, 1.0, 0.06), "staff": STAFF_GRIP}
+			out["b"] = [
+				[0.0, ready],
+				[0.26, upright],
+				[0.42, lifted],
+				[0.56, lifted],
+				[0.66, struck],
+				[0.84, _with(struck, {"sink": 0.16})],
+				[1.04, _with(upright, {"hold_r": Vector3(-0.1, 1.5, 0.24), "lean": 0.04})],
+				[1.2, ready],
+			]
+	var table: Array = STYLES[style]
+	for blow in out:
+		var keys: Array = out[blow]
+		var length: float = float(table[mini(maxi(0, ["a", "b", "c"].find(blow)), table.size() - 1)]["length"])
+		if blow == "air":
+			length = float(BLOWS[0]["length"])
+		if float(keys[keys.size() - 1][0]) < length - 0.001:
+			keys.append([length, keys[keys.size() - 1][1]])
+		# Bones turn evenly between poses on their own, which would let a long shaft swing
+		# through the body or slip out of the second hand: poses every so often keep it right.
+		if style == "staff":
+			out[blow] = _dense(keys, DENSE * 0.5)
+		elif style == "spear":
+			out[blow] = _dense(keys, DENSE * 1.5)
+	return out
+
+
+## More poses between the given ones, each a straight blend of its neighbours (directions blended
+## and made unit length again), so that whatever is solved per pose is solved often.
+static func _dense(keys: Array, step: float) -> Array:
+	var out: Array = []
+	for i in keys.size() - 1:
+		var t0 := float(keys[i][0])
+		var t1 := float(keys[i + 1][0])
+		var p0: Dictionary = keys[i][1]
+		var p1: Dictionary = keys[i + 1][1]
+		out.append(keys[i])
+		var n := int(floor((t1 - t0) / step - 0.001))
+		for j in range(1, n + 1):
+			var f := float(j) / (n + 1)
+			var pose := {}
+			for key in p0.keys() + p1.keys():
+				if pose.has(key):
+					continue
+				var unit := _is_direction(str(key))
+				var a: Variant = p0.get(key)
+				var b: Variant = p1.get(key)
+				if a == null:
+					a = b if unit else _zero_like(b)
+				if b == null:
+					b = a if unit else _zero_like(a)
+				if a is Vector3:
+					var v: Vector3 = (a as Vector3).lerp(b, f)
+					pose[key] = v.normalized() if unit else v
+				else:
+					pose[key] = lerpf(float(a), float(b), f)
+			out.append([t0 + (t1 - t0) * f, pose])
+	out.append(keys[keys.size() - 1])
+	return out
+
+
+## Puts the left fist on the shaft of what the right fist holds, with both thumbs toward the
+## striking end: `spacing` metres from the right fist toward the butt if the arm reaches that far,
+## otherwise the nearest place along the shaft it can reach (hands slide on a staff). The arm
+## reaches there (_reach), then the forearm and wrist turn the fist along the shaft (_grip); twice,
+## because turning the fist moves its hollow a little.
+static func _two_hands(sk: Skeleton3D, local: Dictionary, pelvis_at: Vector3, fist_r: Transform3D, fist_l: Transform3D, spacing: float) -> float:
+	var right := _model_pose(sk, local, pelvis_at, sk.find_bone("hand_r"))
+	var hold: Vector3 = right * fist_r.origin
+	var along: Vector3 = (right.basis * fist_r.basis.y).normalized()
+	var shoulder := _model_pose(sk, local, pelvis_at, sk.find_bone("upperarm_l")).origin
+	var arm := (sk.get_bone_rest(sk.find_bone("lowerarm_l")).origin.length() + sk.get_bone_rest(sk.find_bone("hand_l")).origin.length()) * 0.92
+	# Where the arm cannot reach, the hand slides along the shaft toward the right fist (but stays
+	# a hand's breadth and more from it), or a little the other way.
+	var want := hold - along * spacing
+	var best := 1e9
+	var gap := 0.16
+	while gap <= absf(spacing) + 0.101:
+		var p := hold - along * signf(spacing) * gap
+		var score := maxf(0.0, shoulder.distance_to(p) - arm) * 10.0 + absf(gap - absf(spacing)) * 0.5
+		if score < best:
+			best = score
+			want = p
+		gap += 0.02
+	# Turning the fist moves its hollow, so reach and turn are repeated until they agree.
+	var wrist0: Basis = local[sk.find_bone("hand_l")]
+	for i in 6:
+		local[sk.find_bone("hand_l")] = wrist0
+		var left := _model_pose(sk, local, pelvis_at, sk.find_bone("hand_l"))
+		_reach(sk, local, pelvis_at, "l", want - left.basis * fist_l.origin, Vector3(0.7, -0.5, 0.1))
+		_grip(sk, local, "l", fist_l.basis.y, along)
+	return maxf(0.0, shoulder.distance_to(want) - arm)
+
+
+## The body as balls and rods for keeping a staff out of it: [from, to, radius] each, in whatever
+## space `where` gives the bones' places in (it is called with a bone's name).
+static func body_parts(where: Callable) -> Array:
+	var parts: Array = []
+	var side: Vector3 = ((where.call("upperarm_l") as Vector3) - (where.call("upperarm_r") as Vector3)).normalized()
+	for bone in ["pelvis", "spine_01", "spine_02", "spine_03"]:
+		var c: Vector3 = where.call(bone)
+		parts.append([c - side * 0.07, c + side * 0.07, 0.115])
+	var head_at: Vector3 = where.call("Head")
+	parts.append([head_at + Vector3(0, 0.06, 0), head_at + Vector3(0, 0.14, 0), 0.1])
+	parts.append([where.call("neck_01"), head_at, 0.06])
+	for s in ["l", "r"]:
+		parts.append([where.call("clavicle_" + s), where.call("upperarm_" + s), 0.055])
+		parts.append([where.call("thigh_" + s), where.call("calf_" + s), 0.075])
+		parts.append([where.call("calf_" + s), where.call("foot_" + s), 0.055])
+	return parts
+
+
+## How deep the shaft from `a` to `b` is inside the body (see body_parts), and which way out is
+## shortest: [depth in metres (0 or less = clear), direction].
+static func shaft_depth(parts: Array, a: Vector3, b: Vector3) -> Array:
+	var deepest := -1.0
+	var out := Vector3.ZERO
+	for p in parts:
+		var pts := Geometry3D.get_closest_points_between_segments(a, b, p[0], p[1])
+		var away: Vector3 = pts[0] - pts[1]
+		var into: float = float(p[2]) + STAFF_RADIUS - away.length()
+		if into > deepest:
+			deepest = into
+			# Right through the middle there is no shortest way out: go forward.
+			out = away.normalized() if away.length() > 0.005 else Vector3(0, 0, 1)
+	return [deepest, out]
+
+
+## Moves the right fist, and the staff with it, until the whole shaft is outside the body: at
+## each turn it is shifted the shortest way out of whatever it is deepest in. `at` and `along`
+## are what _hold was given; returns where the fist was moved to.
+static func _clear_shaft(sk: Skeleton3D, local: Dictionary, pelvis_at: Vector3, fist: Transform3D, at: Vector3, along: Vector3, side: String = "r", back: float = STAFF_BACK, front: float = STAFF_FRONT) -> Vector3:
+	for i in 10:
+		var hit := _shaft_hit(sk, local, pelvis_at, fist, side, back, front)
+		if float(hit[0]) < 0.004:
+			break
+		at += (hit[1] as Vector3) * (float(hit[0]) + 0.012)
+		_hold(sk, local, pelvis_at, fist, at, along, side)
+	return at
+
+
+## How deep the staff in the right fist is inside the body in this pose, and the way out
+## (see shaft_depth).
+static func _shaft_hit(sk: Skeleton3D, local: Dictionary, pelvis_at: Vector3, fist: Transform3D, side: String = "r", back: float = STAFF_BACK, front: float = STAFF_FRONT) -> Array:
+	var where := func(bone: String) -> Vector3: return _model_pose(sk, local, pelvis_at, sk.find_bone(bone)).origin
+	var hand := _model_pose(sk, local, pelvis_at, sk.find_bone("hand_" + side))
+	var hollow: Vector3 = hand * fist.origin
+	var runs: Vector3 = (hand.basis * fist.basis.y).normalized()
+	return shaft_depth(body_parts(where), hollow - runs * back, hollow + runs * front)
+
+
+static func _shaft_in(sk: Skeleton3D, local: Dictionary, pelvis_at: Vector3, fist: Transform3D) -> float:
+	return float(_shaft_hit(sk, local, pelvis_at, fist)[0])
+
+
+## Puts the right fist's hollow at `at` (model space) with what it holds pointing `along`: the arm
+## reaches, the wrist turns, and again, since turning the fist moves its hollow.
+static func _hold(sk: Skeleton3D, local: Dictionary, pelvis_at: Vector3, fist: Transform3D, at: Vector3, along: Vector3, side: String = "r", pole: Vector3 = Vector3.ZERO) -> void:
+	if pole == Vector3.ZERO:
+		pole = Vector3(-0.7, -0.5, -0.1) if side == "r" else Vector3(0.7, -0.5, -0.1)
+	# Each pass bends the wrist afresh from where it began, so the bends do not pile up.
+	var wrist0: Basis = local[sk.find_bone("hand_" + side)]
+	for i in 6:
+		local[sk.find_bone("hand_" + side)] = wrist0
+		var hand := _model_pose(sk, local, pelvis_at, sk.find_bone("hand_" + side))
+		_reach(sk, local, pelvis_at, side, at - hand.basis * fist.origin, pole)
+		_grip(sk, local, side, fist.basis.y, along)
+
+
+## Bends an arm so that its wrist comes to `target` (model space), the elbow bending toward
+## `pole`. Out of reach, the arm points at the target at full stretch.
+static func _reach(sk: Skeleton3D, local: Dictionary, pelvis_at: Vector3, side: String, target: Vector3, pole: Vector3) -> void:
+	var upper := sk.find_bone("upperarm_" + side)
+	var lower := sk.find_bone("lowerarm_" + side)
+	var hand := sk.find_bone("hand_" + side)
+	var shoulder := _model_pose(sk, local, pelvis_at, upper).origin
+	var l1 := sk.get_bone_rest(lower).origin.length()
+	var l2 := sk.get_bone_rest(hand).origin.length()
+	var to := target - shoulder
+	var d := clampf(to.length(), absf(l1 - l2) + 0.01, (l1 + l2) * 0.999)
+	var dir := to.normalized()
+	var along := (l1 * l1 - l2 * l2 + d * d) / (2.0 * d)
+	var out_by := sqrt(maxf(l1 * l1 - along * along, 0.0))
+	var bend := pole - dir * pole.dot(dir)
+	if bend.length() < 0.01:
+		bend = dir.cross(Vector3.UP)
+	var elbow := shoulder + dir * along + bend.normalized() * out_by
+	_bend_arm(sk, local, side, elbow - shoulder, shoulder + dir * d - elbow)
+
+
+## Each elbow's hinge, learned from the base pose of the clip being made (see _aimed): "axis", the
+## line the forearm bends about, in the upper arm's own space (turning about it + bends the arm);
+## "straight", the forearm's own orientation with the elbow straight and the forearm unrolled.
+static var _elbows := {}
+
+
+static func _learn_elbows(sk: Skeleton3D, base: Animation) -> void:
+	for side in ["r", "l"]:
+		var lower := sk.find_bone("lowerarm_" + side)
+		var hand := sk.find_bone("hand_" + side)
+		var u := sk.get_bone_rest(lower).origin.normalized()
+		var lb := _anim_basis(base, sk, lower, 0.0)
+		var f := (lb * sk.get_bone_rest(hand).origin).normalized()
+		var axis := u.cross(f)
+		if axis.length() < 0.1:
+			_elbows.erase(side)
+			continue
+		_elbows[side] = {"axis": axis.normalized(), "straight": Basis(axis.normalized(), -u.angle_to(f)) * lb}
+
+
+## Lays an arm along two directions (model space): the upper arm along `upper_dir`, the forearm
+## along `fore_dir`. The elbow only bends as an elbow does, about its hinge and inward: the upper
+## arm turns about its own length so that the hinge lies across the bend, and the forearm comes
+## round the hinge. Its roll is then left to _grip.
+static func _bend_arm(sk: Skeleton3D, local: Dictionary, side: String, upper_dir: Vector3, fore_dir: Vector3) -> void:
+	var upper := sk.find_bone("upperarm_" + side)
+	var lower := sk.find_bone("lowerarm_" + side)
+	var hand := sk.find_bone("hand_" + side)
+	_point_bone(sk, local, upper, lower, upper_dir)
+	if not _elbows.has(side):
+		_point_bone(sk, local, lower, hand, fore_dir)
+		return
+	var elbow: Dictionary = _elbows[side]
+	var u := upper_dir.normalized()
+	var f := fore_dir.normalized()
+	var across := u.cross(f)
+	if across.length() > 0.12:
+		var parent := _model_basis(sk, local, sk.get_bone_parent(upper))
+		var mu: Basis = parent * (local[upper] as Basis)
+		var hinge: Vector3 = mu * (elbow["axis"] as Vector3)
+		hinge = (hinge - u * hinge.dot(u)).normalized()
+		var roll := hinge.signed_angle_to(across.normalized(), u)
+		local[upper] = parent.inverse() * Basis(u, roll) * mu
+	local[lower] = Basis(elbow["axis"] as Vector3, minf(u.angle_to(f), 2.5)) * (elbow["straight"] as Basis)
+
+
+## Turns a bone the short way so that it runs toward `child` along `want` (model space).
+static func _point_bone(sk: Skeleton3D, local: Dictionary, bone: int, child: int, want: Vector3) -> void:
+	var parent := _model_basis(sk, local, sk.get_bone_parent(bone))
+	var along := sk.get_bone_rest(child).origin.normalized()
+	var from := ((local[bone] as Basis) * along).normalized()
+	var to := (parent.inverse() * want).normalized()
+	local[bone] = Basis(Quaternion(from, to)) * (local[bone] as Basis)
+
+
+## Whether a pose value is a direction a bone or a held weapon points (blended as a direction).
+static func _is_direction(key: String) -> bool:
+	return key.contains("arm") or key.begins_with("blade") or key.begins_with("thigh") or key.begins_with("calf")
+
+
+static func _zero_like(v: Variant) -> Variant:
+	return Vector3.ZERO if v is Vector3 else 0.0
 
 
 ## A pose with some of its values changed.
@@ -1596,6 +2550,48 @@ static func _mirror_keys(keys: Array) -> Array:
 ## the chest, and "blade_r" / "blade_l": the way something held in that fist should point (see
 ## _grip). With `whole_body` the clip also moves the hips and legs (see _stand); without it, it
 ## holds the upper body only.
+## The ways of fighting that have a battle stance; a bare fist takes the sword's.
+const GUARD_STYLES := ["sword", "dagger", "sickle", "axe", "bludgeon", "spear", "staff"]
+
+
+## The battle stance of a way of fighting: the weapon held ready as the first blow starts from
+## (so a blow flows straight out of it), the knees a little bent and the chest forward over them.
+## The staff is held in both hands, a good way apart, slanting down across the front of the body
+## with its butt toward the ground ahead.
+static func _guard_pose(style: String) -> Dictionary:
+	var pose: Dictionary
+	if style == "staff":
+		pose = {"hips": -0.15, "twist": -0.2, "hold_r": Vector3(-0.2, 1.24, 0.16), "blade_r": Vector3(-0.25, 0.55, -0.8), "staff": STAFF_GRIP + 0.05}
+	elif style == "sword":
+		pose = (_blow_keys("r")["a"][0][1] as Dictionary).duplicate()
+	else:
+		pose = (_style_keys(style)["a"][0][1] as Dictionary).duplicate()
+	pose["sink"] = float(pose.get("sink", 0.0)) + 0.07
+	pose["lean"] = float(pose.get("lean", 0.0)) + 0.1
+	return pose
+
+
+## The stance as a loop: the body rises and settles a hand's breadth, slowly, as one ready to move.
+static func _guard_clip(sk: Skeleton3D, idle: Animation, strike: Animation, style: String) -> Animation:
+	var low := _guard_pose(style)
+	var high := _with(low, {"sink": float(low["sink"]) - 0.025, "lean": float(low["lean"]) - 0.02})
+	var keys: Array = [[0.0, low], [0.8, high], [1.6, low]]
+	if style == "staff":
+		keys = _dense(keys, DENSE * 0.5)
+	var anim := _aimed(sk, idle, strike, keys, true)
+	anim.loop_mode = Animation.LOOP_LINEAR
+	return anim
+
+
+## Keys of a move played backwards: the poses in reverse order, at mirrored times.
+static func _backwards(keys: Array) -> Array:
+	var length := float(keys[keys.size() - 1][0])
+	var out: Array = []
+	for i in range(keys.size() - 1, -1, -1):
+		out.append([length - float(keys[i][0]), keys[i][1]])
+	return out
+
+
 static func _aimed(sk: Skeleton3D, base: Animation, fist: Animation, keys: Array, whole_body: bool = false) -> Animation:
 	var names: Array = UPPER_BODY.duplicate()
 	for side in ["l", "r"]:
@@ -1604,6 +2600,7 @@ static func _aimed(sk: Skeleton3D, base: Animation, fist: Animation, keys: Array
 				names.append("%s_0%d_%s" % [finger, joint + 1, side])
 	if whole_body:
 		names.append_array(LOWER_BODY)
+	_learn_elbows(sk, base)
 	var out := Animation.new()
 	out.loop_mode = Animation.LOOP_NONE
 	var tracks := {}
@@ -1624,7 +2621,8 @@ static func _aimed(sk: Skeleton3D, base: Animation, fist: Animation, keys: Array
 		out.track_set_path(place, pelvis_path)
 	var child_of := {"upperarm_r": "lowerarm_r", "lowerarm_r": "hand_r", "upperarm_l": "lowerarm_l", "lowerarm_l": "hand_l"}
 	# The way out of each fist on the thumb side, in hand space: what "blade_*" aims.
-	var grips := {"r": fist_frame(sk, fist, 0.46, "r").basis.y, "l": fist_frame(sk, base, 0.0, "l").basis.y}
+	var fists := {"r": fist_frame(sk, fist, 0.46, "r"), "l": fist_frame(sk, base, 0.0, "l")}
+	var grips := {"r": (fists["r"] as Transform3D).basis.y, "l": (fists["l"] as Transform3D).basis.y}
 	for key in keys:
 		var local := {}
 		for b in sk.get_bone_count():
@@ -1651,8 +2649,19 @@ static func _aimed(sk: Skeleton3D, base: Animation, fist: Animation, keys: Array
 				_turn(sk, local, sk.find_bone(n), r)
 		if tw + turned != 0.0 or ln + bent != 0.0:
 			_turn(sk, local, sk.find_bone("neck_01"), Basis(Vector3.UP, -(tw + turned) * 0.6) * Basis(Vector3.RIGHT, -maxf(ln + bent, 0.0) * 0.45))
+		# The shoulders: "shrug_*" lifts one, "reach_*" carries it forward round the chest.
+		for side in ["r", "l"]:
+			var shrug := float(aims.get("shrug_" + side, 0.0))
+			var reach := float(aims.get("reach_" + side, 0.0))
+			if shrug != 0.0 or reach != 0.0:
+				var out_side := 1.0 if side == "r" else -1.0    # the right collarbone runs toward -X
+				_turn(sk, local, sk.find_bone("clavicle_" + side), Basis(Vector3.UP, reach * out_side) * Basis(Vector3.BACK, -shrug * out_side))
+		for side in ["r", "l"]:
+			if aims.has("upperarm_" + side) and aims.has("lowerarm_" + side):
+				_bend_arm(sk, local, side, aims["upperarm_" + side], aims["lowerarm_" + side])
 		for n in ["upperarm_r", "lowerarm_r", "upperarm_l", "lowerarm_l"]:
-			if not aims.has(n):
+			var arm_side: String = n.right(1)
+			if not aims.has(n) or (aims.has("upperarm_" + arm_side) and aims.has("lowerarm_" + arm_side)):
 				continue
 			var b := sk.find_bone(n)
 			var parent := Basis.IDENTITY
@@ -1665,8 +2674,42 @@ static func _aimed(sk: Skeleton3D, base: Animation, fist: Animation, keys: Array
 			var to: Vector3 = (parent.inverse() * (aims[n] as Vector3)).normalized()
 			local[b] = Basis(Quaternion(from, to)) * (local[b] as Basis)
 		for side in ["r", "l"]:
-			if aims.has("blade_" + side):
+			# A fist put in a place ("hold_r" / "hold_l"); a spear's shaft is then kept out of
+			# the body ("shaft_back" / "shaft_front": how far it runs behind and ahead of the fist).
+			if not aims.has("hold_" + side):
+				continue
+			var held: Vector3 = (aims.get("blade_" + side, Vector3.FORWARD) as Vector3).normalized()
+			_hold(sk, local, pelvis_at, fists[side], aims["hold_" + side], held, side, aims.get("pole_" + side, Vector3.ZERO))
+			if aims.has("shaft_back"):
+				_clear_shaft(sk, local, pelvis_at, fists[side], aims["hold_" + side], held, side, float(aims["shaft_back"]), float(aims["shaft_front"]))
+		if aims.has("hold_r"):
+			var blade := (aims.get("blade_r", Vector3.FORWARD) as Vector3).normalized()
+			if aims.has("staff"):
+				# A staff is kept out of the body and within the left hand's reach: where that
+				# hand cannot get to the shaft, the staff is brought toward its shoulder.
+				var held_at := _clear_shaft(sk, local, pelvis_at, fists["r"], aims["hold_r"], blade)
+				for attempt in 4:
+					var short := _two_hands(sk, local, pelvis_at, fists["r"], fists["l"], float(aims["staff"]))
+					if short < 0.01:
+						break
+					var before := {}
+					for arm_bone in ["upperarm_r", "lowerarm_r", "hand_r"]:
+						before[arm_bone] = local[sk.find_bone(arm_bone)]
+					var shoulder_l := _model_pose(sk, local, pelvis_at, sk.find_bone("upperarm_l")).origin
+					var nearer := held_at + (shoulder_l - held_at).normalized() * (short + 0.02)
+					_hold(sk, local, pelvis_at, fists["r"], nearer, blade)
+					nearer = _clear_shaft(sk, local, pelvis_at, fists["r"], nearer, blade)
+					if _shaft_in(sk, local, pelvis_at, fists["r"]) > 0.004:
+						# Nearer would be inside the body: better a hand that slides than that.
+						for arm_bone in before:
+							local[sk.find_bone(arm_bone)] = before[arm_bone]
+						break
+					held_at = nearer
+		for side in ["r", "l"]:
+			if aims.has("blade_" + side) and not aims.has("hold_" + side):
 				_grip(sk, local, side, grips[side], (aims["blade_" + side] as Vector3).normalized())
+		if aims.has("staff"):
+			_two_hands(sk, local, pelvis_at, fists["r"], fists["l"], float(aims["staff"]))
 		for n in tracks:
 			out.rotation_track_insert_key(tracks[n], float(key[0]), (local[sk.find_bone(n)] as Basis).get_rotation_quaternion())
 	# Between two poses the bones turn evenly, which lets a planted foot drift a little while
@@ -1882,14 +2925,36 @@ func _setup_animation(sex: int) -> void:
 	walk.add_blend_point(_clip("Jog_Fwd"), 5.5, -1, &"jog")
 	walk.add_blend_point(_clip("Sprint"), 9.5, -1, &"sprint")
 	graph.add_node("walk", walk)
+	# In battle (see `battle`) the knees bend and the body bobs while standing still.
+	_guard_clips.clear()
+	var guard_legs := AnimationNodeBlend2.new()
+	guard_legs.filter_enabled = true
+	for bone in LOWER_BODY:
+		guard_legs.set_filter_path(NodePath("Armature/Skeleton3D:%s" % bone), true)
+	graph.add_node("guard_legs", guard_legs)
+	_guard_clips.append(_clip("Guard_sword"))
+	graph.add_node("Guard_low", _guard_clips[0])
+	graph.connect_node("guard_legs", 0, "walk")
+	graph.connect_node("guard_legs", 1, "Guard_low")
 	# Off the ground the whole body goes over to the kit's jump pose.
 	graph.add_node("air", AnimationNodeBlend2.new())
 	graph.add_node("Jump", _clip("Jump"))
-	graph.connect_node("air", 0, "walk")
+	graph.connect_node("air", 0, "guard_legs")
 	graph.connect_node("air", 1, "Jump")
 	var upper := _upper_paths()
+	# The arms and chest of the battle stance, under the sling, the bow and every blow.
+	var guard_arms := AnimationNodeBlend2.new()
+	guard_arms.filter_enabled = true
+	for path in upper:
+		guard_arms.set_filter_path(path, true)
+	graph.add_node("guard_hold", guard_arms)
+	_guard_clips.append(_clip("Guard_sword"))
+	graph.add_node("Guard_up", _guard_clips[1])
+	_set_guard_clip()
+	graph.connect_node("guard_hold", 0, "air")
+	graph.connect_node("guard_hold", 1, "Guard_up")
 	# Poses held for as long as a button is: the sling going round, the bow drawn.
-	var below := "air"
+	var below := "guard_hold"
 	for held in [["whirl_hold", "Sling_Whirl"], ["draw_hold", "Bow_Draw"]]:
 		var blend := AnimationNodeBlend2.new()
 		blend.filter_enabled = true
@@ -1909,8 +2974,8 @@ func _setup_animation(sex: int) -> void:
 	# Each upper-body move is a one-shot laid over everything before it in this list. Blows have
 	# a speed of their own: a heavy weapon swings slower.
 	var shots := [
-		["blow_a_r", "Blow_A_R", 0.05, 0.15], ["blow_b_r", "Blow_B_R", 0.05, 0.12], ["blow_c_r", "Blow_C_R", 0.05, 0.15],
-		["blow_a_l", "Blow_A_L", 0.05, 0.15], ["blow_b_l", "Blow_B_L", 0.05, 0.12], ["blow_c_l", "Blow_C_L", 0.05, 0.15],
+		["blow_a_r", "Blow_A_R", 0.1, 0.2], ["blow_b_r", "Blow_B_R", 0.1, 0.18], ["blow_c_r", "Blow_C_R", 0.1, 0.2],
+		["blow_a_l", "Blow_A_L", 0.1, 0.2], ["blow_b_l", "Blow_B_L", 0.1, 0.18], ["blow_c_l", "Blow_C_L", 0.1, 0.2],
 		["punch", "Punch_Cross", 0.06, 0.15], ["throw", "Sling_Release", 0.04, 0.15], ["loose", "Bow_Loose", 0.03, 0.15],
 		["reach_back", "Reach_Back", 0.12, 0.12], ["reach_hip", "Reach_Hip", 0.12, 0.12],
 	]
@@ -1927,8 +2992,14 @@ func _setup_animation(sex: int) -> void:
 		if not graph.has_node(source):
 			var made := _clip(source)
 			graph.add_node(source, made)
-			if source == "Blow_A_R" or source == "Blow_A_L":
-				_first_blow[source.right(1).to_lower()] = made
+			if source.begins_with("Blow_"):
+				# Blow_<A|B|C>_<R|L>: given the staff's or the jump attack's clip when those are used.
+				var hand := source.right(1).to_lower()
+				if not _blow_nodes.has(hand):
+					_blow_nodes[hand] = [null, null, null]
+				(_blow_nodes[hand] as Array)[["A", "B", "C"].find(source.substr(5, 1))] = made
+				if source.substr(5, 1) == "A":
+					_first_blow[hand] = made
 		if shot.begins_with("blow") or shot == "punch":
 			graph.add_node(shot + "_speed", AnimationNodeTimeScale.new())
 			graph.connect_node(shot + "_speed", 0, source)
@@ -1996,6 +3067,11 @@ func _setup_animation(sex: int) -> void:
 
 
 var _whirl_blend := 0.0
+## Battle mode: set by whoever moves the figure. The figure takes its weapon's battle stance
+## (Guard_<style>) while it is armed and has its weapon out, and leaves it smoothly.
+var battle := false
+var _guard := 0.0
+var _guard_clips: Array = []   # the stance's legs and arms (AnimationNodeAnimation)
 var _draw_blend := 0.0
 
 
@@ -2034,12 +3110,18 @@ func animate(delta: float, speed: float, airborne: bool = false) -> void:
 		_land_stop()
 	# What each hand holds turns smoothly between how it is carried and how it is gripped for a
 	# blow (or, for a bow, held up to shoot), so it never jumps out of the fist.
+	# In battle the stance comes in over a quarter of a second; with the weapon put away, a bow in
+	# hand, or nothing to hold, it goes.
+	var guarding := battle and not sheathed and _swap_left < 0.0 and is_weapon(weapon_kind) and weapon_kind != "bow" and offhand_kind != "bow" and _speed < 7.0
+	_guard = move_toward(_guard, 1.0 if guarding else 0.0, delta * 4.0)
+	_tree.set("parameters/guard_hold/blend_amount", _guard)
+	_tree.set("parameters/guard_legs/blend_amount", _guard * (1.0 - clampf((_speed - 0.3) / 1.5, 0.0, 1.0)))
 	var k := 1.0 - exp(-28.0 * delta)
 	if weapon != null and weapon.get_parent() == hand_r:
-		var target := _strike if _strike_left > 0.0 and _strike_side == "r" else _carry
+		var target := _strike if (_strike_left > 0.0 and _strike_side == "r") or _guard > 0.5 else _carry
 		weapon.transform = weapon.transform.interpolate_with(target, k)
 	if offhand != null and offhand.get_parent() == hand_l:
-		var up := (_strike_left > 0.0 and _strike_side == "l") or (offhand_kind == "bow" and (drawing or _loose_t >= 0.0))
+		var up := (_strike_left > 0.0 and _strike_side == "l") or (offhand_kind == "bow" and (drawing or _loose_t >= 0.0)) or (_guard > 0.5 and is_weapon(offhand_kind))
 		offhand.transform = offhand.transform.interpolate_with(_strike_l if up else _carry_l, k)
 	if _swap_left >= 0.0:
 		_swap_left -= delta
@@ -2084,7 +3166,7 @@ func swing() -> void:
 	attack(0)
 
 
-## Blow `step` of a combo (see BLOWS), made with the right hand ("r") or the left ("l"), at
+## Blow `step` of a combo (see STYLES: each weapon has its own), made with the right hand ("r") or the left ("l"), at
 ## `speed` (1 = normal). A hand with no weapon punches. A blow that follows another takes over.
 ## A figure standing still puts its hips and legs into the blow; one on the move keeps walking
 ## and strikes with the upper body only. Off the ground the first blow is a different one: the
@@ -2092,18 +3174,23 @@ func swing() -> void:
 func attack(step: int, side: String = "r", speed: float = 1.0) -> void:
 	if _tree == null or dead:
 		return
-	step = clampi(step, 0, BLOWS.size() - 1)
-	var m: Dictionary = BLOWS[step]
 	var held := weapon_kind if side == "r" else offhand_kind
 	var armed := is_weapon(held)
+	var list: Array = blows(held if armed else "none")
+	var m: Dictionary
+	if armed and step >= list.size() and style_of(held) == "sword":
+		m = FOURTH_CUT
+	else:
+		step = clampi(step, 0, list.size() - 1)
+		m = list[step]
 	var shot := "%s_%s" % [m["shot"], side] if armed else "punch"
 	var leap := armed and _in_air and step == 0
-	var clip := "Blow_%s_%s" % ["Air" if leap else str(m["shot"]).right(1).to_upper(), side.to_upper()]
-	if armed and step == 0:
-		(_first_blow[side] as AnimationNodeAnimation).animation = clip
+	var clip := blow_clip("Air" if leap else str(m.get("letter", str(m["shot"]).right(1).to_upper())), side, held)
+	if armed:
+		((_blow_nodes[side] as Array)[["blow_a", "blow_b", "blow_c"].find(str(m["shot"]))] as AnimationNodeAnimation).animation = clip
 	if _shot != "" and _shot != shot:
 		_tree.set("parameters/%s/request" % _shot, AnimationNodeOneShot.ONE_SHOT_REQUEST_FADE_OUT)
-	_tree.set("parameters/%s_speed/scale" % shot, speed)
+	_tree.set("parameters/%s_speed/scale" % shot, speed if armed else speed * PUNCH_HIT / float(m["hit"]))
 	_play(shot)
 	_shot = shot
 	_strike_side = side
@@ -2116,6 +3203,18 @@ func attack(step: int, side: String = "r", speed: float = 1.0) -> void:
 		_legs_stop()
 	if armed:
 		_strike_left = float(m["length"]) / speed
+
+
+## Changes the speed of the blow under way: 0 holds it where it is (a blow being charged). `left`
+## is how much of the clip, at normal speed, is still to play.
+func set_blow_speed(speed: float, left: float) -> void:
+	if _tree == null or _shot == "":
+		return
+	_tree.set("parameters/%s_speed/scale" % _shot, speed)
+	_strike_left = 1e9 if speed <= 0.0 else left / speed
+	if _legs == "blow":
+		_tree.set("parameters/stance_%d_speed/scale" % _stance, speed)
+		_legs_left = 1e9 if speed <= 0.0 else left / speed
 
 
 ## Plays the hips and legs of `clip` over the walk, taking over from whatever stance was there.

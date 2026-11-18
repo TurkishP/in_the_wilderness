@@ -60,6 +60,8 @@ func start_raid() -> void:
 		var kind: String = cfg["kind"]
 		if bool(cfg.get("slingers", false)) and i % 3 == 2:
 			kind = "slinger"
+		elif i == 0 and kind == "raider" and count >= 2:
+			kind = "champion"      # from the second raid on, a picked man leads them
 		var p: Vector3 = world.ground(ox + world.rng.randf_range(-7.0, 7.0), oz + world.rng.randf_range(-7.0, 7.0))
 		raiders.append(world.spawn_enemy(kind, p, mult, {"raider": true}))
 	Game.say("Raid! %s are coming from the %s." % [cfg["label"], world.compass(ox, oz)])

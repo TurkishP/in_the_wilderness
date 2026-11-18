@@ -87,6 +87,14 @@ func _process(delta: float) -> void:
 		(g[0] as Node3D).rotate_y(float(g[1]) * delta)
 
 
+## How far the pillar is fire: 0 the white cloud of the day, 1 the fire of the night.
+static func burn(amount: float) -> void:
+	if _ball_material == null:
+		return
+	_ball_material.emission = Color(1.0, 1.0, 1.0).lerp(Color(1.0, 0.5, 0.14), amount)
+	_ball_material.emission_energy_multiplier = lerpf(0.12, 2.4, amount)
+
+
 static func _make_shared() -> void:
 	if _ball != null:
 		return

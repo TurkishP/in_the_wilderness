@@ -1,6 +1,7 @@
 extends Node3D
 ## A person in the camp or the wilderness. What happens on interaction is decided by the world.
-## Roles: villager, giver, merchant, smith, captain, witness, suspect, child, captive.
+## Roles: villager, giver, merchant, smith, captain, witness, suspect, child, captive; and out in
+## the wilds a caravan's trader ("caravan") and its guards ("guard").
 ##
 ## Villagers are the ordinary people of the camp. Some walk about along the camp's paths,
 ## some sit by the fire, some kneel at their work. All of them will talk.
@@ -47,8 +48,10 @@ func setup(n: String, r: String, color: Color, opts: Dictionary = {}) -> void:
 	if lower.contains("elder"):
 		look.merge({"hair_color": 4, "beard": 1, "outfit": 1, "head": 1}, true)
 	match role:
-		"merchant":
+		"merchant", "caravan":
 			look.merge({"sex": 0, "outfit": 2, "beard": 1}, true)
+		"guard":
+			look.merge({"sex": 0, "outfit": 3, "beard": 1}, true)
 		"smith":
 			look.merge({"sex": 0, "outfit": 3, "head": 2}, true)
 		"captain":
@@ -97,7 +100,7 @@ func prompt_text() -> String:
 	if npc_name == "":
 		return ""
 	match role:
-		"merchant":
+		"merchant", "caravan":
 			return "Trade with the %s" % npc_name.to_lower()
 		"smith":
 			return "Strengthen gear with the %s" % npc_name.to_lower()

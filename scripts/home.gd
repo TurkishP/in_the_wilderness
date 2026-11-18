@@ -14,6 +14,7 @@ const WOOD := Color(0.42, 0.29, 0.18)
 const CLOTH := Color(0.8, 0.72, 0.56)
 const STRIPE := Color(0.55, 0.16, 0.13)
 
+var door_light: OmniLight3D   # daylight through the doorway; dim by night (daylight.gd)
 var bed: Node3D
 var chest: Node3D
 var lid_hinge: Node3D
@@ -152,6 +153,7 @@ func _shell() -> void:
 	lamp.position = Vector3(0.9, 1.2, -0.4)
 	add_child(lamp)
 	var day := OmniLight3D.new()
+	door_light = day
 	day.light_color = Color(1.0, 0.92, 0.8)
 	day.light_energy = 0.8
 	day.omni_range = 7.0

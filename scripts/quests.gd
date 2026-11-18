@@ -223,7 +223,8 @@ func on_gather(index: int) -> void:
 func _complete(q: Dictionary, factor: float, words: String) -> void:
 	var silver := int(reward_silver(q) * factor)
 	Game.silver += silver
-	var text := "%s\n\n[i]You receive %d silver." % [words, silver]
+	var learned := Game.gain_xp(int(40.0 * float(world.stage["mult"]) * factor))
+	var text := "%s\n\n[i]You receive %d silver and gain %d experience." % [words, silver, learned]
 	if factor >= 1.0 and q.has("reward_item"):
 		var id := str(q["reward_item"])
 		var inst := Game.add_item(id)

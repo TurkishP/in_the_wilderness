@@ -23,6 +23,7 @@ const METRES := 25.0       # real metres per game metre
 const GAIN := 1.5          # how much taller the regional relief is drawn
 
 static var _grain: NoiseTexture2D
+static var _ripple := {}   # "shade" / "relief" -> the sand ripple tile
 static var _bumps: NoiseTexture2D
 
 var site_km := Vector2.ZERO
@@ -37,9 +38,13 @@ var _dunes := FastNoiseLite.new()
 var _crags := FastNoiseLite.new()
 var _tint := FastNoiseLite.new()
 var _amp := 4.0
+## Ground shaped for the special places (scripts/places.gd plan): hills, basins, flats, gullies.
+var stamps: Array = []
 
 
-func setup(stage: Dictionary) -> void:
+## `planner`, given this terrain, returns the ground shaping for the land's special places; it is
+## called once the regional heights and the seas are known, before the ground is built.
+func setup(stage: Dictionary, planner: Callable = Callable()) -> void:
 	collision_layer = 1
 	collision_mask = 0
 	var seed_value := int(stage["seed"])
@@ -67,6 +72,7 @@ func setup(stage: Dictionary) -> void:
 			_regional[iz * _rn + ix] = (e - site_elevation) / METRES * GAIN
 
 	_find_water()
+	stamps = planner.call(self) if planner.is_valid() else []
 	var sand: Color = stage["sand"]
 	var rock: Color = stage["rock"]
 	var grass: Color = stage.get("grass", Color(0.62, 0.58, 0.36))
@@ -109,7 +115,33 @@ func _ground(x: float, z: float) -> float:
 	var settle := smoothstep(62.0, 140.0, d)
 	var rise := smoothstep(64.0, 104.0, d) * (1.0 - smoothstep(HALF - 60.0, HALF - 5.0, edge))
 	var dunes := (_dunes.get_noise_2d(x, z) + _dunes.get_noise_2d(x * 3.1 + 500.0, z * 3.1) * 0.25) * _amp
-	return regional(x, z) * settle + dunes * rise
+	var h := regional(x, z) * settle + dunes * rise
+	for s in stamps:
+		h = _stamp(s, x, z, h)
+	return h
+
+
+## The ground at (x, z), height `h`, as a place's shaping leaves it: a hill raised, a basin or a
+## gully sunk, or a flat levelled, each easing out to nothing at its edge.
+static func _stamp(s: Dictionary, x: float, z: float, h: float) -> float:
+	var here := Vector2(x, z)
+	if s["kind"] == "gully":
+		var q := Geometry2D.get_closest_point_to_segment(here, s["a"], s["b"])
+		var tg := q.distance_to(here) / float(s["w"])
+		return h - float(s["depth"]) * (0.5 + 0.5 * cos(PI * tg)) if tg < 1.0 else h
+	var t := here.distance_to(s["at"]) / float(s["r"])
+	if t >= 1.0:
+		return h
+	var bump := 0.5 + 0.5 * cos(PI * t)
+	match str(s["kind"]):
+		"hill":
+			return h + float(s["height"]) * bump
+		"basin":
+			return h - float(s["depth"]) * bump
+		"flat":
+			var w := 1.0 if t < 0.6 else 0.5 + 0.5 * cos(PI * (t - 0.6) / 0.4)
+			return lerpf(h, float(s["level"]), w)
+	return h
 
 
 ## Height of the backdrop: regional shape, roughened into crags on high ground.
@@ -172,7 +204,49 @@ func _material() -> StandardMaterial3D:
 	m.uv1_triplanar = true
 	m.uv1_world_triplanar = true
 	m.uv1_scale = Vector3(0.14, 0.14, 0.14)
+	# Close to, the sand shows the ripples the wind leaves and a scatter of grit. This is a
+	# second, finer layer over the broad grain; on steep rock the same lines read as strata.
+	m.detail_enabled = true
+	m.detail_blend_mode = BaseMaterial3D.BLEND_MODE_MUL
+	m.detail_uv_layer = BaseMaterial3D.DETAIL_UV_2
+	m.uv2_triplanar = true
+	m.uv2_world_triplanar = true
+	m.uv2_scale = Vector3(0.42, 0.42, 0.42)
+	m.detail_albedo = _ripples(false)
+	m.detail_normal = _ripples(true)
 	return m
+
+
+## Wind ripples in sand as a tile that repeats: wavering parallel crests about a foot apart,
+## with fine grit over them. `relief` gives the same thing as a normal map.
+static func _ripples(relief: bool) -> ImageTexture:
+	var key := "relief" if relief else "shade"
+	if _ripple.has(key):
+		return _ripple[key]
+	var n := 256
+	var waver := FastNoiseLite.new()
+	waver.seed = 9
+	waver.frequency = 0.012
+	var grit := FastNoiseLite.new()
+	grit.seed = 4
+	grit.frequency = 0.35
+	var img := Image.create_empty(n, n, false, Image.FORMAT_RGB8)
+	for y in n:
+		for x in n:
+			# Looked up on a torus, so the tile's edges meet.
+			var ax := TAU * x / n
+			var ay := TAU * y / n
+			var bend := waver.get_noise_3d(cos(ax) * 40.0, sin(ax) * 40.0, cos(ay) * 40.0 + sin(ay) * 17.0)
+			var crest := 0.5 + 0.5 * sin(ay * 8.0 + bend * 5.0 + sin(ax * 2.0) * 0.6)
+			crest = pow(crest, 1.6)
+			var speck := grit.get_noise_3d(cos(ax) * 60.0, sin(ax) * 60.0, cos(ay) * 60.0 + sin(ay) * 31.0)
+			var v := clampf(0.86 + 0.14 * crest + speck * 0.07, 0.0, 1.0) if not relief else clampf(crest * 0.85 + speck * 0.15 + 0.07, 0.0, 1.0)
+			img.set_pixel(x, y, Color(v, v, v))
+	if relief:
+		img.bump_map_to_normal_map(3.0)
+	img.generate_mipmaps()
+	_ripple[key] = ImageTexture.create_from_image(img)
+	return _ripple[key]
 
 
 func _build_ground(sand: Color, rock: Color, grass: Color, grass_amount: float) -> void:

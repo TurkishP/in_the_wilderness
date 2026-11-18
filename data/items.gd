@@ -6,13 +6,17 @@ extends RefCounted
 ## kind    the shape it has in the hand or on the body (human.gd); for ammo, which ammo it is
 ## size    [columns, rows] it takes in the bag or the chest
 ## weight  kilograms. A heavier weapon swings more slowly (Game.swing_speed).
-## damage, defense, hp (more health), thirst (thirst regained per second, against the heat),
+## damage, defense, hp (more health), thirst (how much slower thirst comes on: 0.03 is 12% slower,
+## see Game.THIRST_GEAR),
 ## stamina (stamina regained per second): what it gives while it is equipped. Missing = 0.
-## hands   2 for a weapon that takes both hands (bows)
+## hands   2 for a weapon that takes both hands (staffs, bows)
 ## stack   how many fit in one place in the bag (ammo)
 ## wear    the clothing pieces it shows on the figure, [piece, color]. A color may be "cloth" or
 ##         "sash" for the colors chosen in the character creator.
-## Items with price 0 are never sold by the trader (starting gear and special finds).
+## rarity  1 = rare, 2 = legendary: finds that only fall from enemies (data/drops.gd). Missing = common.
+## worth   for spoils (slot "loot"), which cannot be worn: what the trader pays for one.
+## Items with price 0 are never sold by the camp's trader (starting gear and special finds). The
+## rare caravans out in the wilds sell rare and legendary finds (data/encounters.gd).
 
 const WOOD := Color(0.42, 0.28, 0.16)
 const BRONZE := Color(0.8, 0.6, 0.3)
@@ -26,7 +30,7 @@ const ITEMS := {
 	"flint_knife": {"slot": "hand", "kind": "dagger", "name": "Flint knife", "tier": 1, "price": 15, "size": [1, 2], "weight": 0.3, "damage": 9.0, "color": Color(0.5, 0.47, 0.42)},
 	"dagger": {"slot": "hand", "kind": "dagger", "name": "Bronze dagger", "tier": 2, "price": 45, "size": [1, 2], "weight": 0.4, "damage": 18.0, "color": BRONZE},
 	"iron_dagger": {"slot": "hand", "kind": "dagger", "name": "Iron dagger", "tier": 4, "price": 230, "size": [1, 2], "weight": 0.5, "damage": 29.0, "color": IRON},
-	"gilded_dagger": {"slot": "hand", "kind": "dagger", "name": "Gilded dagger of Egypt", "tier": 5, "price": 0, "size": [1, 2], "weight": 0.5, "damage": 36.0, "stamina": 1.0, "color": GOLD},
+	"gilded_dagger": {"slot": "hand", "kind": "dagger", "name": "Gilded dagger of Egypt", "rarity": 1, "tier": 5, "price": 0, "size": [1, 2], "weight": 0.5, "damage": 36.0, "stamina": 1.0, "color": GOLD},
 	# ---- clubs, maces and axes: heavy and slow
 	"club": {"slot": "hand", "kind": "club", "name": "Acacia club", "tier": 1, "price": 18, "size": [1, 3], "weight": 1.6, "damage": 14.0, "color": WOOD},
 	"stone_mace": {"slot": "hand", "kind": "mace", "name": "Stone mace", "tier": 2, "price": 60, "size": [1, 3], "weight": 2.2, "damage": 22.0, "color": Color(0.55, 0.52, 0.47)},
@@ -38,16 +42,16 @@ const ITEMS := {
 	"sickle_sword": {"slot": "hand", "kind": "sickle", "name": "Bronze sickle-sword", "tier": 3, "price": 120, "size": [1, 3], "weight": 1.2, "damage": 27.0, "color": BRONZE},
 	"iron_sword": {"slot": "hand", "kind": "sword", "name": "Iron sword", "tier": 5, "price": 520, "size": [1, 3], "weight": 1.6, "damage": 47.0, "color": IRON},
 	"long_sword": {"slot": "hand", "kind": "sword_long", "name": "Sea-raider's long sword", "tier": 5, "price": 680, "size": [1, 4], "weight": 2.1, "damage": 56.0, "color": IRON},
-	"bashan_blade": {"slot": "hand", "kind": "sword_long", "name": "Blade of Bashan", "tier": 6, "price": 0, "size": [1, 4], "weight": 2.4, "damage": 66.0, "hp": 10.0, "color": Color(0.5, 0.52, 0.58)},
+	"bashan_blade": {"slot": "hand", "kind": "sword_long", "name": "Blade of Bashan", "rarity": 2, "tier": 6, "price": 0, "size": [1, 4], "weight": 2.4, "damage": 66.0, "hp": 10.0, "color": Color(0.5, 0.52, 0.58)},
 	# ---- staffs
-	"staff": {"slot": "hand", "kind": "staff", "name": "Shepherd's staff", "tier": 1, "price": 0, "size": [1, 4], "weight": 1.4, "damage": 12.0, "color": WOOD},
-	"shod_staff": {"slot": "hand", "kind": "staff", "name": "Bronze-shod staff", "tier": 3, "price": 110, "size": [1, 4], "weight": 2.0, "damage": 25.0, "stamina": 0.5, "color": WOOD},
+	"staff": {"slot": "hand", "kind": "staff", "hands": 2, "name": "Shepherd's staff", "tier": 1, "price": 0, "size": [1, 4], "weight": 1.4, "damage": 12.0, "color": WOOD},
+	"shod_staff": {"slot": "hand", "kind": "staff", "hands": 2, "name": "Bronze-shod staff", "tier": 3, "price": 110, "size": [1, 4], "weight": 2.0, "damage": 25.0, "stamina": 0.5, "color": WOOD},
 	# ---- spears: long reach
 	"hunting_spear": {"slot": "hand", "kind": "spear", "name": "Hunting spear", "tier": 2, "price": 55, "size": [1, 4], "weight": 1.5, "damage": 19.0, "color": Color(0.55, 0.52, 0.47)},
 	"bronze_spear": {"slot": "hand", "kind": "spear", "name": "Bronze spear", "tier": 3, "price": 140, "size": [1, 4], "weight": 1.8, "damage": 29.0, "color": BRONZE},
 	"spear": {"slot": "hand", "kind": "spear", "name": "Raider's spear", "tier": 4, "price": 260, "size": [1, 4], "weight": 2.0, "damage": 36.0, "color": BRONZE},
 	"iron_spear": {"slot": "hand", "kind": "spear", "name": "Iron-headed spear", "tier": 5, "price": 560, "size": [1, 4], "weight": 2.3, "damage": 50.0, "color": IRON},
-	"anak_spear": {"slot": "hand", "kind": "spear_long", "name": "Spear of the Anakim", "tier": 6, "price": 0, "size": [1, 4], "weight": 3.6, "damage": 72.0, "color": IRON},
+	"anak_spear": {"slot": "hand", "kind": "spear_long", "name": "Spear of the Anakim", "rarity": 2, "tier": 6, "price": 0, "size": [1, 4], "weight": 3.6, "damage": 72.0, "color": IRON},
 	# ---- bows: both hands, need arrows
 	"hunting_bow": {"slot": "hand", "kind": "bow", "hands": 2, "name": "Hunting bow", "tier": 2, "price": 75, "size": [2, 3], "weight": 0.8, "damage": 16.0, "color": WOOD},
 	"composite_bow": {"slot": "hand", "kind": "bow", "hands": 2, "name": "Composite bow", "tier": 4, "price": 300, "size": [2, 3], "weight": 1.0, "damage": 30.0, "color": Color(0.5, 0.33, 0.18)},
@@ -67,7 +71,7 @@ const ITEMS := {
 	"headcloth": {"slot": "head", "kind": "cap", "name": "Linen headcloth", "tier": 1, "price": 12, "size": [2, 2], "weight": 0.2, "defense": 1.0, "thirst": 0.03, "color": LINEN, "wear": [["cap", LINEN], ["band", "sash"]]},
 	"leather_cap": {"slot": "head", "kind": "cap", "name": "Leather cap", "tier": 2, "price": 40, "size": [2, 2], "weight": 0.5, "defense": 3.0, "color": LEATHER, "wear": [["cap", LEATHER]]},
 	"bronze_helmet": {"slot": "head", "kind": "helmet", "name": "Bronze helmet", "tier": 4, "price": 260, "size": [2, 2], "weight": 1.8, "defense": 7.0, "color": BRONZE, "wear": [["helmet", BRONZE]]},
-	"crested_helmet": {"slot": "head", "kind": "helmet", "name": "Crested bronze helmet", "tier": 5, "price": 0, "size": [2, 2], "weight": 2.0, "defense": 9.0, "hp": 10.0, "color": GOLD, "wear": [["helmet", BRONZE], ["crown", GOLD]]},
+	"crested_helmet": {"slot": "head", "kind": "helmet", "name": "Crested bronze helmet", "rarity": 1, "tier": 5, "price": 0, "size": [2, 2], "weight": 2.0, "defense": 9.0, "hp": 10.0, "color": GOLD, "wear": [["helmet", BRONZE], ["crown", GOLD]]},
 	# ---- neck
 	"cord_amulet": {"slot": "neck", "kind": "necklace", "name": "Cord amulet", "tier": 1, "price": 15, "size": [1, 1], "weight": 0.05, "stamina": 0.5, "color": Color(0.55, 0.45, 0.3), "wear": [["necklace", Color(0.55, 0.45, 0.3)]]},
 	"carnelian_beads": {"slot": "neck", "kind": "necklace", "name": "Carnelian beads", "tier": 2, "price": 70, "size": [1, 1], "weight": 0.1, "hp": 8.0, "color": Color(0.75, 0.25, 0.15), "wear": [["necklace", Color(0.75, 0.25, 0.15)]]},
@@ -93,6 +97,35 @@ const ITEMS := {
 	"cloak": {"slot": "body", "kind": "robe", "name": "Robe and travel cloak", "tier": 2, "price": 70, "size": [2, 4], "weight": 2.2, "defense": 4.0, "thirst": 0.05, "color": Color(0.4, 0.27, 0.17), "wear": [["top_long", "cloth"], ["skirt_long", "cloth"], ["mantle", Color(0.4, 0.27, 0.17)], ["cloak", Color(0.4, 0.27, 0.17)]]},
 	"dress": {"slot": "body", "kind": "dress", "name": "Embroidered dress", "tier": 2, "price": 80, "size": [2, 4], "weight": 0.9, "defense": 2.0, "hp": 5.0, "thirst": 0.03, "color": Color(0.6, 0.18, 0.16), "wear": [["top_long", Color(0.6, 0.18, 0.16)], ["skirt_long", Color(0.6, 0.18, 0.16)], ["mantle", Color(0.2, 0.26, 0.48)]]},
 	"priestly_robe": {"slot": "body", "kind": "robe", "name": "Fine blue robe", "tier": 4, "price": 280, "size": [2, 4], "weight": 1.4, "defense": 5.0, "hp": 12.0, "thirst": 0.06, "stamina": 0.8, "color": Color(0.2, 0.26, 0.48), "wear": [["top_long", Color(0.2, 0.26, 0.48)], ["skirt_long", Color(0.2, 0.26, 0.48)], ["mantle", Color(0.9, 0.86, 0.74)]]},
+	# ---- rare finds (data/drops.gd, table "rare")
+	"thorn_club": {"slot": "hand", "kind": "club", "name": "Thorn-studded war club", "rarity": 1, "tier": 2, "price": 0, "size": [1, 3], "weight": 1.8, "damage": 21.0, "color": WOOD},
+	"chieftains_spear": {"slot": "hand", "kind": "spear", "name": "Chieftain's spear", "rarity": 1, "tier": 3, "price": 0, "size": [1, 4], "weight": 1.6, "damage": 33.0, "stamina": 0.3, "color": BRONZE},
+	"khopesh": {"slot": "hand", "kind": "sickle", "name": "Egyptian khopesh", "rarity": 1, "tier": 3, "price": 0, "size": [1, 3], "weight": 1.3, "damage": 33.0, "color": BRONZE},
+	"horn_bow": {"slot": "hand", "kind": "bow", "hands": 2, "name": "Horn-bellied bow", "rarity": 1, "tier": 3, "price": 0, "size": [2, 3], "weight": 0.9, "damage": 25.0, "color": Color(0.55, 0.4, 0.22)},
+	"maryannu_scale": {"slot": "top", "kind": "armor", "name": "Maryannu's scale coat", "rarity": 1, "tier": 4, "price": 0, "size": [2, 3], "weight": 8.5, "defense": 16.0, "hp": 8.0, "color": BRONZE, "wear": [["top_short", "cloth"], ["vest", BRONZE], ["bracers", BRONZE]]},
+	"arad_mace": {"slot": "hand", "kind": "mace", "name": "Mace of Arad", "rarity": 1, "tier": 4, "price": 0, "size": [1, 3], "weight": 2.3, "damage": 40.0, "color": BRONZE},
+	"heshbon_axe": {"slot": "hand", "kind": "axe", "name": "Axe of Heshbon", "rarity": 1, "tier": 5, "price": 0, "size": [2, 3], "weight": 2.9, "damage": 65.0, "color": BRONZE},
+	# ---- legendary finds (table "legendary")
+	"chieftains_blade": {"slot": "hand", "kind": "sickle", "name": "Blade of the desert chieftains", "rarity": 2, "tier": 3, "price": 0, "size": [1, 3], "weight": 1.1, "damage": 37.0, "hp": 8.0, "color": GOLD},
+	"elders_staff": {"slot": "hand", "kind": "staff", "hands": 2, "name": "Aaron's staff", "rarity": 2, "tier": 4, "price": 0, "size": [1, 4], "weight": 1.5, "damage": 42.0, "stamina": 1.5, "thirst": 0.04, "color": WOOD},
+	"great_bow": {"slot": "hand", "kind": "bow", "hands": 2, "name": "Great bow of the east", "rarity": 2, "tier": 5, "price": 0, "size": [2, 4], "weight": 1.3, "damage": 52.0, "color": Color(0.25, 0.16, 0.1)},
+	"kings_khopesh": {"slot": "hand", "kind": "sickle", "name": "Sickle sword of the kings of Midian", "rarity": 2, "tier": 6, "price": 0, "size": [1, 3], "weight": 1.2, "damage": 60.0, "stamina": 0.8, "color": GOLD},
+	"giants_shield": {"slot": "hand", "kind": "shield", "name": "Shield of the Anakim", "rarity": 2, "tier": 6, "price": 0, "size": [2, 3], "weight": 7.0, "defense": 20.0, "hp": 10.0, "color": BRONZE},
+
+	# ---- spoils of the hunt: cannot be worn, only sold
+	"viper_skin": {"slot": "loot", "kind": "skin", "name": "Viper skin", "tier": 1, "price": 0, "worth": 6, "size": [1, 2], "weight": 0.1, "color": Color(0.62, 0.52, 0.3)},
+	"scorpion_sting": {"slot": "loot", "kind": "sting", "name": "Scorpion sting", "tier": 1, "price": 0, "worth": 5, "size": [1, 1], "weight": 0.05, "color": Color(0.3, 0.2, 0.12)},
+	"jackal_pelt": {"slot": "loot", "kind": "skin", "name": "Jackal pelt", "tier": 1, "price": 0, "worth": 9, "size": [2, 2], "weight": 0.8, "color": Color(0.6, 0.48, 0.3)},
+	"turquoise": {"slot": "loot", "kind": "stones", "name": "Turquoise", "tier": 2, "price": 0, "worth": 28, "size": [1, 1], "weight": 0.15, "color": Color(0.3, 0.72, 0.68)},
+	"wolf_pelt": {"slot": "loot", "kind": "skin", "name": "Wolf pelt", "tier": 1, "price": 0, "worth": 18, "size": [2, 2], "weight": 1.2, "color": Color(0.62, 0.57, 0.48)},
+	"hyena_pelt": {"slot": "loot", "kind": "skin", "name": "Striped hyena hide", "tier": 1, "price": 0, "worth": 15, "size": [2, 2], "weight": 1.4, "color": Color(0.7, 0.66, 0.57)},
+	"leopard_skin": {"slot": "loot", "kind": "skin", "name": "Leopard skin", "tier": 2, "price": 0, "worth": 55, "size": [2, 3], "weight": 1.6, "color": Color(0.82, 0.68, 0.44)},
+	"lion_skin": {"slot": "loot", "kind": "skin", "name": "Lion skin", "tier": 3, "price": 0, "worth": 110, "size": [3, 3], "weight": 4.0, "color": Color(0.78, 0.62, 0.4)},
+	"bear_pelt": {"slot": "loot", "kind": "skin", "name": "Bear pelt", "tier": 3, "price": 0, "worth": 85, "size": [3, 3], "weight": 5.0, "color": Color(0.6, 0.48, 0.34)},
+	"lion_claw": {"slot": "loot", "kind": "sting", "name": "Lion's claw", "tier": 3, "price": 0, "worth": 22, "size": [1, 1], "weight": 0.05, "color": Color(0.9, 0.86, 0.76)},
+	"bear_claw": {"slot": "loot", "kind": "sting", "name": "Bear's claw", "tier": 3, "price": 0, "worth": 16, "size": [1, 1], "weight": 0.05, "color": Color(0.86, 0.82, 0.72)},
+	"serpent_fang": {"slot": "loot", "kind": "sting", "name": "Fiery serpent's fang", "tier": 2, "price": 0, "worth": 14, "size": [1, 1], "weight": 0.05, "color": Color(0.9, 0.85, 0.75)},
+
 	# ---- ammunition
 	"stones": {"slot": "ammo", "kind": "stones", "name": "Sling stones", "tier": 1, "price": 0, "size": [1, 1], "weight": 0.15, "stack": 5, "color": Color(0.62, 0.58, 0.52)},
 	"arrows": {"slot": "ammo", "kind": "arrows", "name": "Arrows", "tier": 1, "price": 0, "size": [1, 3], "weight": 0.03, "stack": 20, "color": WOOD},
@@ -105,14 +138,16 @@ const SLOT_NAMES := {
 	"belt": "Belt", "bottom": "Lower body", "sling": "Sling",
 }
 const STAT_NAMES := {
-	"damage": "Damage", "defense": "Defense", "hp": "Health", "thirst": "Thirst regen", "stamina": "Stamina regen",
+	"damage": "Damage", "defense": "Defense", "hp": "Health", "thirst": "Thirst", "stamina": "Stamina regen",
 }
 
-## What the scout carries things in: a grid of places. The trader sells the bigger ones, in order.
+## What the scout carries things in: a grid of places. They are the bag's levels, in PACK_ORDER:
+## the first is carried from the start and the trader sells the next ones in turn. (The keys are
+## kept from when the bags were smaller, since saves name them.)
 const PACKS := {
-	"pouch": {"name": "Belt pouch", "grid": [6, 4], "price": 0},
-	"shoulder_bag": {"name": "Shoulder bag", "grid": [8, 5], "price": 60},
-	"pack": {"name": "Traveller's pack", "grid": [10, 6], "price": 200},
+	"pouch": {"name": "Shoulder bag", "grid": [8, 5], "price": 0},
+	"shoulder_bag": {"name": "Traveller's pack", "grid": [10, 5], "price": 60},
+	"pack": {"name": "Caravan pack", "grid": [10, 6], "price": 200},
 }
 const PACK_ORDER := ["pouch", "shoulder_bag", "pack"]
 ## The chest in the scout's tent.

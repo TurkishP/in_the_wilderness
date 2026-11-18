@@ -83,6 +83,44 @@ func _add(parent: Node3D, mi: MeshInstance3D, pos: Vector3, rot: Vector3 = Vecto
 	return mi
 
 
+## The collision of a ridge tent: its own two slopes, so nobody stops short of the cloth or
+## walks into it.
+func _solid_ridge(parent: Node3D, size: Vector3) -> void:
+	var hx := size.x * 0.5
+	var hz := size.z * 0.5
+	_solid_hull(parent, PackedVector3Array([
+		Vector3(-hx, 0, -hz), Vector3(hx, 0, -hz), Vector3(0, size.y, -hz),
+		Vector3(-hx, 0, hz), Vector3(hx, 0, hz), Vector3(0, size.y, hz)]))
+
+
+func _solid_hull(parent: Node3D, points: PackedVector3Array) -> void:
+	var sb := StaticBody3D.new()
+	sb.collision_layer = 1
+	sb.collision_mask = 0
+	var cs := CollisionShape3D.new()
+	var hull := ConvexPolygonShape3D.new()
+	hull.points = points
+	cs.shape = hull
+	sb.add_child(cs)
+	parent.add_child(sb)
+
+
+## A round thing's collision (a barrel, a jar, a basket): stood on, walked round. `pos` is its
+## middle.
+func _solid_cyl(parent: Node3D, radius: float, height: float, pos: Vector3) -> void:
+	var sb := StaticBody3D.new()
+	sb.collision_layer = 1
+	sb.collision_mask = 0
+	var cs := CollisionShape3D.new()
+	var shape := CylinderShape3D.new()
+	shape.radius = radius
+	shape.height = height
+	cs.shape = shape
+	sb.add_child(cs)
+	sb.position = pos
+	parent.add_child(sb)
+
+
 func _solid(parent: Node3D, size: Vector3, pos: Vector3) -> void:
 	var sb := StaticBody3D.new()
 	sb.collision_layer = 1
@@ -172,7 +210,7 @@ func _tent(kind: String, p: Vector2, angle: float, s: float, rng: RandomNumberGe
 			var prism := PrismMesh.new()
 			prism.size = size
 			_add(node, _mesh(prism, cloth, "cloth"), Vector3(0, size.y * 0.5, 0))
-			_solid(node, Vector3(size.x * 0.85, size.y, size.z), Vector3(0, size.y * 0.5, 0))
+			_solid_ridge(node, size)
 		"black":
 			# The long, low tent of dark goat hair, with upright walls and a shallow roof.
 			var w := 5.8 * s
@@ -189,7 +227,10 @@ func _tent(kind: String, p: Vector2, angle: float, s: float, rng: RandomNumberGe
 			var h := 2.9 * s
 			_add(node, Game.mesh_cyl(0.07, rad, h, cloth, "cloth"), Vector3(0, h * 0.5, 0))
 			_add(node, Game.mesh_cyl(0.03, 0.03, 0.5, WOOD, "wood"), Vector3(0, h + 0.2, 0))
-			_solid(node, Vector3(rad * 1.5, h, rad * 1.5), Vector3(0, h * 0.5, 0))
+			var cone := PackedVector3Array([Vector3(0, h, 0)])
+			for k in 8:
+				cone.append(Vector3(cos(TAU * k / 8.0) * rad, 0, sin(TAU * k / 8.0) * rad))
+			_solid_hull(node, cone)
 		"booth":
 			# An open shelter: a cloth roof on four poles, for shade and for work.
 			var w := 3.1 * s
@@ -206,7 +247,7 @@ func _tent(kind: String, p: Vector2, angle: float, s: float, rng: RandomNumberGe
 			_add(node, _mesh(prism, cloth, "cloth"), Vector3(0, size.y * 0.5, 0))
 			for k in [-1.0, 1.0]:
 				_add(node, Game.mesh_cyl(0.04, 0.04, 0.5, WOOD, "wood"), Vector3(0, size.y + 0.15, k * size.z * 0.3))
-			_solid(node, Vector3(size.x * 0.85, size.y, size.z), Vector3(0, size.y * 0.5, 0))
+			_solid_ridge(node, size)
 
 
 ## The scout's own tent: a family tent of striped cloth with its door open toward the plaza and
@@ -241,7 +282,7 @@ func _build_home() -> void:
 		_add(node, Game.mesh_cyl(0.045, 0.045, 0.9, WOOD, "wood"), Vector3(0, size.y + 0.3, k * size.z * 0.3))
 	var flag := Game.mesh_box(Vector3(0.03, 0.32, 0.55), Color(0.2, 0.28, 0.55), "linen")
 	_add(node, flag, Vector3(0, size.y + 0.6, size.z * 0.3 + 0.3))
-	_solid(node, Vector3(size.x * 0.85, size.y, size.z), Vector3(0, size.y * 0.5, 0))
+	_solid_ridge(node, size)
 	var sign := Game.label3d("Your tent", 64, Color(1.0, 0.92, 0.7))
 	sign.position = Vector3(0, size.y + 1.3, 0)
 	sign.visibility_range_end = 35.0
@@ -286,6 +327,7 @@ func _water_station(kind: String, at: Vector3, rng: RandomNumberGenerator) -> vo
 		_add(node, Game.mesh_cyl(0.3, 0.3, 0.04, wood.darkened(0.1), "wood"), Vector3(0.22, 0.97, 0.12), Vector3(0.12, 0, 0.18))
 		_add(node, Game.mesh_cyl(0.015, 0.015, 0.45, wood.darkened(0.2), "wood"), Vector3(-0.3, 0.9, 0), Vector3(0, 0, 0.9))
 		_add(node, Game.mesh_sphere(0.06, wood.darkened(0.2), "wood"), Vector3(-0.47, 0.72, 0))
+		_solid_cyl(node, 0.38, 0.97, Vector3(0, 0.485, 0))
 	else:
 		# A low table with a clay jug and three wooden cups.
 		_add(node, Game.mesh_box(Vector3(0.9, 0.06, 0.6), wood, "wood"), Vector3(0, 0.42, 0))
@@ -299,9 +341,11 @@ func _water_station(kind: String, at: Vector3, rng: RandomNumberGenerator) -> vo
 		_add(node, Game.mesh_box(Vector3(0.03, 0.2, 0.05), clay.darkened(0.1), "clay"), Vector3(-0.05, 0.66, 0), Vector3(0, 0, -0.3))
 		for k in 3:
 			_add(node, Game.mesh_cyl(0.05, 0.04, 0.09, Color(0.5, 0.36, 0.22), "wood"), Vector3(0.12 + (k % 2) * 0.13, 0.5, -0.14 + k * 0.14))
+		_solid(node, Vector3(0.92, 0.46, 0.62), Vector3(0, 0.23, 0))
 		# Two large water jars beside the table.
 		for k in 2:
 			_add(node, Game.mesh_cyl(0.2, 0.28, 0.7, clay.darkened(0.05), "clay"), Vector3(0.75 + k * 0.5, 0.35, 0.1))
+			_solid_cyl(node, 0.27, 0.7, Vector3(0.75 + k * 0.5, 0.35, 0.1))
 	waters.append({"pos": at, "kind": kind})
 
 
@@ -490,6 +534,7 @@ func _work(work: String, at: Vector3, angle: float) -> void:
 			_add(node, Game.mesh_box(Vector3(0.86, 0.03, 0.5), Color(0.35, 0.28, 0.24), "cloth"), Vector3(0, 0.11, 0.2))
 		"spin":
 			_add(node, Game.mesh_cyl(0.3, 0.22, 0.25, Color(0.55, 0.42, 0.28), "basket"), Vector3(0.1, 0.125, 0.1))
+			_solid_cyl(node, 0.3, 0.25, Vector3(0.1, 0.125, 0.1))
 			for k in 4:
 				_add(node, Game.mesh_sphere(0.11, Color(0.93, 0.91, 0.86)), Vector3(0.1 + sin(k * 1.6) * 0.12, 0.3, 0.1 + cos(k * 1.6) * 0.12))
 		"grind":
@@ -497,15 +542,19 @@ func _work(work: String, at: Vector3, angle: float) -> void:
 			_add(node, Game.mesh_box(Vector3(0.36, 0.12, 0.6), Color(0.45, 0.43, 0.41), "stone"), Vector3(0, 0.06, 0.05), Vector3(0.08, 0, 0))
 			_add(node, Game.mesh_box(Vector3(0.3, 0.08, 0.14), Color(0.35, 0.33, 0.32), "stone"), Vector3(0, 0.17, 0.05))
 			_add(node, Game.mesh_cyl(0.2, 0.14, 0.14, Color(0.66, 0.42, 0.3), "clay"), Vector3(0.45, 0.07, 0.2))
+			_solid(node, Vector3(0.38, 0.22, 0.62), Vector3(0, 0.11, 0.05))
 		"cook":
 			for k in 3:
 				_add(node, Game.mesh_sphere(0.14, Color(0.35, 0.32, 0.3), "stone"), Vector3(sin(TAU * k / 3.0) * 0.28, 0.1, 0.25 + cos(TAU * k / 3.0) * 0.28))
 			_add(node, Game.mesh_cyl(0.0, 0.2, 0.3, Color(1.0, 0.5, 0.1), "", 2.5), Vector3(0, 0.15, 0.25))
 			_add(node, Game.mesh_cyl(0.3, 0.24, 0.3, Color(0.2, 0.17, 0.15), "clay"), Vector3(0, 0.42, 0.25))
+			_solid_cyl(node, 0.3, 0.57, Vector3(0, 0.285, 0.25))
 			_add(node, Game.mesh_cyl(0.015, 0.015, 0.6, WOOD, "wood"), Vector3(0.12, 0.7, 0.25), Vector3(0.4, 0, 0.3))
 		"arms":
 			# A whetstone with a blade on it, and spears stood in a rack.
 			_add(node, Game.mesh_box(Vector3(0.5, 0.14, 0.3), Color(0.42, 0.42, 0.44), "stone"), Vector3(0, 0.07, 0.1))
+			_solid(node, Vector3(0.5, 0.16, 0.3), Vector3(0, 0.08, 0.1))
+			_solid(node, Vector3(1.5, 1.3, 0.25), Vector3(1.1, 0.65, 0.6))
 			_add(node, Game.mesh_box(Vector3(0.05, 0.012, 0.55), BRONZE.lightened(0.15), "metal"), Vector3(0, 0.15, 0.12), Vector3(0, 0.5, 0))
 			for k in [-1.0, 1.0]:
 				_add(node, Game.mesh_cyl(0.04, 0.04, 1.3, WOOD, "wood"), Vector3(1.1 + k * 0.5, 0.65, 0.6))
@@ -546,12 +595,16 @@ func _place_props(rng: RandomNumberGenerator) -> void:
 			1:
 				for k in 2 + rng.randi() % 2:
 					_add(self, Game.mesh_cyl(0.2, 0.3, 0.7, Color(0.66, 0.42, 0.3), "clay"), at + Vector3(k * 0.55, 0.35, (k % 2) * 0.3))
+					_solid_cyl(self, 0.28, 0.7, at + Vector3(k * 0.55, 0.35, (k % 2) * 0.3))
 			2:
 				_add(self, Game.mesh_cyl(0.34, 0.26, 0.3, Color(0.6, 0.48, 0.3), "basket"), at + Vector3(0, 0.15, 0))
 				_add(self, Game.mesh_cyl(0.26, 0.2, 0.24, Color(0.55, 0.43, 0.27), "basket"), at + Vector3(0.6, 0.12, 0.2))
+				_solid_cyl(self, 0.34, 0.3, at + Vector3(0, 0.15, 0))
+				_solid_cyl(self, 0.26, 0.24, at + Vector3(0.6, 0.12, 0.2))
 			3:
 				for k in 5:
 					_add(self, Game.mesh_cyl(0.05, 0.05, 1.0, WOOD.darkened(k * 0.05), "wood"), at + Vector3(0, 0.05 + (k / 3) * 0.1, (k % 3) * 0.11), Vector3(0, rng.randf_range(-0.15, 0.15), PI * 0.5))
+				_solid(self, Vector3(1.0, 0.2, 0.36), at + Vector3(0, 0.1, 0.11))
 
 
 static func _sheep_mesh() -> ArrayMesh:

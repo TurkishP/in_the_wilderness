@@ -7,6 +7,8 @@ extends Control
 ## swap them, or on an equipment slot to wear it. Right-click is the quick way: equip or take off,
 ## move between bag and chest, buy or sell. Hovering shows what an item does.
 
+const Ui := preload("res://scripts/ui.gd")
+const ItemArt := preload("res://scripts/item_art.gd")
 const Items := preload("res://data/items.gd")
 const CELL := 44.0
 const PAD := 26.0
@@ -27,6 +29,7 @@ var held: Dictionary = {}        # the item picked up, following the mouse
 var message := ""                # a line at the bottom: what just happened or why not
 var _from := {}                  # where `held` came from: {"list", "x", "y"} or {"slot"}
 var _trader: Array = []
+var _caravan := {}    # trading with a caravan: {stock, title}; its stock is _trader
 var _on_close := Callable()
 var _font: Font
 var _panel := Rect2()
@@ -42,7 +45,7 @@ func _ready() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	process_mode = Node.PROCESS_MODE_ALWAYS
-	_font = ThemeDB.fallback_font
+	_font = Ui.font()
 	_style = StyleBoxFlat.new()
 	_style.bg_color = Color(0.09, 0.07, 0.05, 0.96)
 	_style.border_color = Color(0.75, 0.6, 0.35)
@@ -72,13 +75,15 @@ func _ready() -> void:
 
 
 ## Opens one of the screens. `on_close` runs when it closes.
-func open(screen: String, tier: int = 1, on_close: Callable = Callable()) -> void:
+## For a caravan, `caravan` is {stock, title}: its goods, which buying takes away.
+func open(screen: String, tier: int = 1, on_close: Callable = Callable(), caravan: Dictionary = {}) -> void:
 	mode = screen
 	held = {}
 	message = ""
 	_on_close = on_close
+	_caravan = caravan
 	if mode == "trade":
-		_trader = Game.shop_grid(tier)
+		_trader = caravan["stock"] if not caravan.is_empty() else Game.shop_grid(tier)
 	visible = true
 	_refresh_footer()
 	queue_redraw()
@@ -282,6 +287,9 @@ func _drop(list: Array, grid: Vector2i, where: String, at: Vector2i) -> void:
 ## Wears the held item in `slot`. What it replaces is picked up; anything else it pushes off
 ## (a bow needs both hands, a dress both top and bottom) goes into the bag.
 func _wear_held(slot: String) -> void:
+	if slot == "hand_l" and Game.LONE_WEAPONS.has(Game.kind(held)):
+		message = "%s is held in the right hand, alone." % Game.item_def(held)["name"]
+		return
 	if not Game.slot_accepts(slot, held):
 		message = "%s does not go there." % Game.item_def(held)["name"]
 		return
@@ -315,6 +323,8 @@ func _buy(it: Dictionary) -> void:
 		message = "Your bag has no room for it."
 	elif Game.try_buy(str(it["id"])):
 		message = "Bought: %s." % Game.item_def(it)["name"]
+		if not _caravan.is_empty():
+			Game.remove_from(_trader, it)
 
 
 func _sell_held() -> void:
@@ -354,7 +364,7 @@ func _refresh_footer() -> void:
 	for c in _footer.get_children():
 		_footer.remove_child(c)
 		c.queue_free()
-	if mode == "trade":
+	if mode == "trade" and _caravan.is_empty():
 		_button("Buy %d sling stones  (%d silver)" % [Game.STONE_BUNDLE, Game.STONE_PRICE], func() -> void: _buy_ammo("stones"), Game.silver >= Game.STONE_PRICE)
 		_button("Buy %d arrows  (%d silver)" % [Game.ARROW_BUNDLE, Game.ARROW_PRICE], func() -> void: _buy_ammo("arrows"), Game.silver >= Game.ARROW_PRICE)
 		var next := Game.next_pack()
@@ -406,12 +416,13 @@ func _draw() -> void:
 	draw_rect(Rect2(Vector2.ZERO, get_viewport_rect().size), Color(0, 0, 0, 0.35))
 	draw_style_box(_style, _panel)
 	var titles := {"gear": "Your gear", "chest": "Your chest", "trade": "Caravan trader"}
-	_text(_panel.position + Vector2(PAD, PAD + 26.0), str(titles.get(mode, "")), 26, Color(1.0, 0.85, 0.5))
+	_text(_panel.position + Vector2(PAD, PAD + 26.0), str(_caravan.get("title", titles.get(mode, ""))), 26, Color(1.0, 0.85, 0.5))
 	var pack: Dictionary = Items.PACKS[Game.pack]
-	_text(_bag_at + Vector2(0, -8), "%s  —  %d of %d places" % [pack["name"], Game.used_places(), Game.places()], 16, Color(0.9, 0.85, 0.75))
+	var bag_level: int = Items.PACK_ORDER.find(Game.pack) + 1
+	_text(_bag_at + Vector2(0, -8), "Bag level %d of %d  ·  %s  ·  %d of %d places" % [bag_level, Items.PACK_ORDER.size(), pack["name"], Game.used_places(), Game.places()], 16, Color(0.9, 0.85, 0.75))
 	_grid(Game.bag, Game.bag_grid(), _bag_at)
 	var y := _bag_at.y + Game.bag_grid().y * CELL + 30.0
-	_text(Vector2(_bag_at.x, y), "Silver %d     Bronze %d" % [Game.silver, Game.bronze], 17, Color(1.0, 0.92, 0.7))
+	_text(Vector2(_bag_at.x, y), "Silver %d     Bronze %d     Water %d/%d" % [Game.silver, Game.bronze, Game.water, Game.max_water], 17, Color(1.0, 0.92, 0.7))
 	_text(Vector2(_bag_at.x, y + 24.0), "Sling stones %d     Arrows %d     Bag weight %.1f kg" % [Game.stones(), Game.arrows(), Game.bag_weight()], 16)
 	var hint := {
 		"gear": "Click to pick up and put down. Drop on a slot to wear it.\nRight-click: equip, or take off into the bag.",
@@ -426,7 +437,7 @@ func _draw() -> void:
 			_text(_right_at + Vector2(0, -8), "The chest  —  kept here for the whole journey", 16, Color(0.9, 0.85, 0.75))
 			_grid(Game.chest, Game.chest_grid(), _right_at)
 		"trade":
-			_text(_right_at + Vector2(0, -8), "For sale  —  hover to see the price", 16, Color(0.9, 0.85, 0.75))
+			_text(_right_at + Vector2(0, -8), "Rare goods, one of each  —  hover to see the price" if not _caravan.is_empty() else "For sale  —  hover to see the price", 16, Color(0.9, 0.85, 0.75))
 			_grid(_trader, Game.TRADER_GRID, _right_at)
 	if message != "":
 		_text(Vector2(_panel.position.x + PAD, _footer.position.y - 14.0), message, 17, Color(1.0, 0.75, 0.55))
@@ -459,12 +470,14 @@ func _grid(list: Array, grid: Vector2i, at: Vector2) -> void:
 ## One item: a tile with a border in its tier's color, its picture and, for ammo, how many.
 func _tile(r: Rect2, it: Dictionary, lit: bool) -> void:
 	var tier := clampi(int(Game.item_def(it).get("tier", 1)), 0, TIER_COLORS.size() - 1)
-	draw_rect(r.grow(-2.0), Color(0.3, 0.25, 0.18, 0.95) if lit else Color(0.2, 0.17, 0.13, 0.95))
-	draw_rect(r.grow(-2.0), TIER_COLORS[tier], false, 1.5)
+	var rare: int = Game.rarity(it)
+	ItemArt.tile(self, r, TIER_COLORS[tier] if rare == 0 else Game.RARITY_COLORS[rare], rare, lit)
 	_icon(r.grow(-6.0), it)
 	if Game.item_def(it).has("stack"):
+		draw_string_outline(_font, r.end - Vector2(18.0, 6.0), str(int(it["count"])), HORIZONTAL_ALIGNMENT_LEFT, -1, 15, 4, Color(0, 0, 0, 0.9))
 		draw_string(_font, r.end - Vector2(18.0, 6.0), str(int(it["count"])), HORIZONTAL_ALIGNMENT_LEFT, -1, 15, Color.WHITE)
 	elif int(it.get("plus", 0)) > 0:
+		draw_string_outline(_font, r.position + Vector2(5.0, 16.0), "+%d" % int(it["plus"]), HORIZONTAL_ALIGNMENT_LEFT, -1, 14, 4, Color(0, 0, 0, 0.9))
 		draw_string(_font, r.position + Vector2(5.0, 16.0), "+%d" % int(it["plus"]), HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color(1.0, 0.85, 0.4))
 
 
@@ -491,7 +504,7 @@ func _doll() -> void:
 		["Health", "%d / %d" % [int(Game.hp), int(Game.max_hp)]],
 		["Damage", _damage_line()],
 		["Defense", "%d  (stops %d%%)" % [int(round(Game.defense())), int(round(Game.armor_block() * 100.0))]],
-		["Thirst regen", Game.stat_text("thirst", Game.total("thirst"))],
+		["Thirst", Game.stat_text("thirst", Game.total("thirst"))],
 		["Stamina regen", Game.stat_text("stamina", Game.total("stamina"))],
 		["Sling", "%d damage" % int(round(Game.sling_power())) if not Game.equipped["sling"].is_empty() else "none"],
 		["Worn weight", "%.1f kg" % Game.equipped_weight()],
@@ -534,99 +547,15 @@ func _draw_held() -> void:
 # ---------------------------------------------------------------- pictures
 
 ## A small picture of an item, drawn in `r`. `fade` dims it (for a slot taken by something else).
+## The picture of an item (item_art.gd).
 func _icon(r: Rect2, it: Dictionary, fade: float = 1.0) -> void:
-	var d := Game.item_def(it)
-	var col: Color = d.get("color", Color(0.7, 0.7, 0.7))
-	col.a = fade
-	var wood := Color(0.45, 0.3, 0.17, fade)
-	var dark := Color(0.12, 0.09, 0.06, fade)
-	var c := r.get_center()
-	var s := minf(r.size.x, r.size.y)
-	var top := r.position.y
-	var bottom := r.end.y
-	match str(d.get("kind", "")):
-		"dagger", "sword", "sword_short", "sword_long", "sickle":
-			var guard := bottom - r.size.y * 0.28
-			var bw := clampf(r.size.x * 0.14, 4.0, 7.0)
-			draw_colored_polygon(PackedVector2Array([Vector2(c.x - bw, guard), Vector2(c.x + bw, guard), Vector2(c.x + bw, top + 10.0), Vector2(c.x, top), Vector2(c.x - bw, top + 10.0)]), col)
-			draw_line(Vector2(c.x, guard), Vector2(c.x, top + 4.0), col.lightened(0.35), 1.0)
-			if d["kind"] == "sickle":
-				draw_arc(Vector2(c.x + bw * 2.2, top + 12.0), bw * 2.2, PI, PI * 1.9, 10, col, bw * 1.4)
-			draw_line(Vector2(c.x - 13.0, guard), Vector2(c.x + 13.0, guard), col.darkened(0.2), 5.0)
-			draw_line(Vector2(c.x, guard), Vector2(c.x, bottom - 3.0), wood, 6.0)
-			draw_circle(Vector2(c.x, bottom - 3.0), 4.0, col.darkened(0.2))
-		"staff":
-			draw_line(Vector2(c.x, bottom), Vector2(c.x, top + 12.0), col, 6.0)
-			draw_arc(Vector2(c.x + 8.0, top + 12.0), 8.0, PI, TAU, 10, col, 6.0)
-		"spear", "spear_long":
-			draw_line(Vector2(c.x, bottom), Vector2(c.x, top + 18.0), wood, 5.0)
-			draw_colored_polygon(PackedVector2Array([Vector2(c.x - 7.0, top + 22.0), Vector2(c.x, top), Vector2(c.x + 7.0, top + 22.0)]), col if col.r > 0.6 else Color(0.7, 0.7, 0.72, fade))
-		"club":
-			draw_colored_polygon(PackedVector2Array([Vector2(c.x - 3.0, bottom), Vector2(c.x + 3.0, bottom), Vector2(c.x + 9.0, top + 4.0), Vector2(c.x - 9.0, top + 4.0)]), col)
-		"mace":
-			draw_line(Vector2(c.x, bottom), Vector2(c.x, top + 14.0), wood, 5.0)
-			draw_circle(Vector2(c.x, top + 13.0), 12.0, col)
-		"axe":
-			draw_line(Vector2(c.x - 6.0, bottom), Vector2(c.x - 6.0, top + 4.0), wood, 6.0)
-			draw_colored_polygon(PackedVector2Array([Vector2(c.x - 6.0, top + 10.0), Vector2(c.x + r.size.x * 0.4, top + 2.0), Vector2(c.x + r.size.x * 0.4, top + 44.0), Vector2(c.x - 6.0, top + 34.0)]), col)
-		"bow":
-			var rad := r.size.y * 0.55
-			var cx := r.position.x + rad * 0.35 + 6.0
-			draw_arc(Vector2(cx + rad * 0.9, c.y), rad, PI * 0.68, PI * 1.32, 20, col, 5.0)
-			draw_line(Vector2(cx + rad * 0.9 + rad * cos(PI * 0.68), c.y + rad * sin(PI * 0.68)), Vector2(cx + rad * 0.9 + rad * cos(PI * 1.32), c.y + rad * sin(PI * 1.32)), Color(0.9, 0.87, 0.8, fade), 1.5)
-		"shield":
-			draw_circle(c, s * 0.46, Color(0.75, 0.55, 0.3, fade).darkened(0.25))
-			draw_circle(c, s * 0.41, col)
-			draw_circle(c, s * 0.1, Color(0.85, 0.65, 0.35, fade))
-		"cap", "helmet":
-			var pts := PackedVector2Array()
-			for k in 13:
-				var a := PI + PI * k / 12.0
-				pts.append(c + Vector2(cos(a), sin(a)) * s * 0.42 + Vector2(0, s * 0.12))
-			draw_colored_polygon(pts, col)
-			draw_line(c + Vector2(-s * 0.46, s * 0.12), c + Vector2(s * 0.46, s * 0.12), col.darkened(0.3), 5.0)
-			if d["kind"] == "helmet":
-				draw_line(c + Vector2(0, -s * 0.3), c + Vector2(0, s * 0.12), col.lightened(0.3), 2.0)
-		"necklace":
-			for k in 9:
-				var a := PI * 0.1 + PI * 0.8 * k / 8.0
-				draw_circle(c + Vector2(cos(a), sin(a) * 0.8) * s * 0.36 - Vector2(0, s * 0.12), 3.0, col)
-			draw_circle(c + Vector2(0, s * 0.3), 5.0, col.lightened(0.2))
-		"belt":
-			draw_rect(Rect2(r.position.x, c.y - 6.0, r.size.x, 12.0), col)
-			draw_rect(Rect2(c.x - 7.0, c.y - 8.0, 14.0, 16.0), Color(0.85, 0.65, 0.35, fade), false, 3.0)
-		"tunic", "armor":
-			var w := r.size.x
-			draw_colored_polygon(PackedVector2Array([
-				Vector2(r.position.x + w * 0.3, top), Vector2(r.position.x + w * 0.7, top), Vector2(r.end.x, top + 18.0),
-				Vector2(r.end.x - 9.0, top + 34.0), Vector2(r.position.x + w * 0.8, top + 26.0), Vector2(r.position.x + w * 0.8, bottom),
-				Vector2(r.position.x + w * 0.2, bottom), Vector2(r.position.x + w * 0.2, top + 26.0), Vector2(r.position.x + 9.0, top + 34.0),
-				Vector2(r.position.x, top + 18.0)]), col)
-			draw_line(Vector2(c.x - 7.0, top + 2.0), Vector2(c.x, top + 12.0), dark, 2.0)
-			draw_line(Vector2(c.x + 7.0, top + 2.0), Vector2(c.x, top + 12.0), dark, 2.0)
-		"kilt", "skirt":
-			draw_colored_polygon(PackedVector2Array([Vector2(r.position.x + 10.0, top + 4.0), Vector2(r.end.x - 10.0, top + 4.0), Vector2(r.end.x - 2.0, bottom), Vector2(r.position.x + 2.0, bottom)]), col)
-			draw_line(Vector2(r.position.x + 10.0, top + 6.0), Vector2(r.end.x - 10.0, top + 6.0), dark, 3.0)
-		"robe", "dress":
-			var w := r.size.x
-			draw_colored_polygon(PackedVector2Array([
-				Vector2(r.position.x + w * 0.32, top), Vector2(r.position.x + w * 0.68, top), Vector2(r.end.x - 2.0, top + 22.0),
-				Vector2(r.end.x - 9.0, top + 36.0), Vector2(r.position.x + w * 0.75, top + 28.0), Vector2(r.end.x - 2.0, bottom),
-				Vector2(r.position.x + 2.0, bottom), Vector2(r.position.x + w * 0.25, top + 28.0), Vector2(r.position.x + 9.0, top + 36.0),
-				Vector2(r.position.x + 2.0, top + 22.0)]), col)
-		"sling":
-			draw_line(Vector2(c.x - 5.0, top), Vector2(c.x - 2.0, bottom - 14.0), col, 2.0)
-			draw_line(Vector2(c.x + 5.0, top), Vector2(c.x + 2.0, bottom - 14.0), col, 2.0)
-			draw_circle(Vector2(c.x, bottom - 10.0), 8.0, col.darkened(0.3))
-		"stones":
-			for p in [Vector2(-7, 4), Vector2(6, 5), Vector2(0, -6)]:
-				draw_circle(c + p, 7.0, col.darkened(0.1 * absf(p.x) / 7.0))
-		"arrows":
-			for k in 3:
-				var x := c.x - 8.0 + k * 8.0
-				draw_line(Vector2(x, bottom - 2.0), Vector2(x, top + 10.0), col, 2.0)
-				draw_colored_polygon(PackedVector2Array([Vector2(x - 4.0, top + 12.0), Vector2(x, top + 2.0), Vector2(x + 4.0, top + 12.0)]), Color(0.65, 0.65, 0.68, fade))
-				draw_line(Vector2(x - 3.0, bottom - 2.0), Vector2(x - 3.0, bottom - 12.0), Color(0.9, 0.87, 0.8, fade), 2.0)
+	ItemArt.icon(self, r, str(it["id"]), Game.item_def(it), fade)
+
+
+## Legendary finds glow and sparkle, so the screen is drawn afresh while it is open.
+func _process(_delta: float) -> void:
+	if visible:
+		queue_redraw()
 
 
 # ---------------------------------------------------------------- what an item does
@@ -663,10 +592,14 @@ func _update_tip() -> void:
 func describe(it: Dictionary, where: String = "") -> String:
 	var d := Game.item_def(it)
 	var tier := clampi(int(d.get("tier", 1)), 0, TIER_COLORS.size() - 1)
-	var t := "[b][color=#%s]%s[/color][/b]\n" % [TIER_COLORS[tier].to_html(false), Game.item_name(it)]
+	var rare: int = Game.rarity(it)
+	var name_color: Color = TIER_COLORS[tier] if rare == 0 else Game.RARITY_COLORS[rare]
+	var t := "[b][color=#%s]%s[/color][/b]\n" % [name_color.to_html(false), Game.item_name(it)]
+	if rare > 0:
+		t += "[color=#%s]%s[/color]\n" % [name_color.to_html(false), Game.RARITY_NAMES[rare]]
 	var where_text := {
 		"hand": "Right or left hand", "head": "Head", "neck": "Neck", "belt": "Belt", "top": "Upper body",
-		"bottom": "Lower body", "body": "Upper and lower body together", "sling": "Sling", "ammo": "Carried in the bag",
+		"bottom": "Lower body", "body": "Upper and lower body together", "sling": "Sling", "ammo": "Carried in the bag", "loot": "Spoils: the trader buys them",
 	}
 	var slot_text: String = where_text.get(str(d["slot"]), "")
 	if Game.is_two_handed(it):

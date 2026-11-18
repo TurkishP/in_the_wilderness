@@ -5,10 +5,65 @@ signal toast(text: String)
 signal look_changed   # the player's appearance was edited
 signal gear_changed   # equipped gear changed
 signal settings_changed
+signal xp_gained(amount: int)
+signal leveled(level: int)
 
 const Items := preload("res://data/items.gd")
 const Stages := preload("res://data/stages.gd")
 const Enemies := preload("res://data/enemies.gd")
+const Drops := preload("res://data/drops.gd")
+const Forge := preload("res://data/forge.gd")
+const Encounters := preload("res://data/encounters.gd")
+const Skills := preload("res://data/skills.gd")
+## Which way each kind of weapon is used: the same table as HumanScript.STYLE_OF (kept here as
+## well, since the Game autoload does not load the figure's script).
+const STYLE_OF_KIND := {"dagger": "dagger", "sickle": "sickle", "sword_short": "sword", "sword": "sword", "sword_long": "sword",
+	"axe": "axe", "club": "bludgeon", "mace": "bludgeon", "spear": "spear", "spear_long": "spear", "staff": "staff"}
+## The short sounds (made by tools/make_effects.py): name -> how many takes of it there are.
+const SOUND_TAKES := {"swing": 3, "swing_heavy": 2, "hit_flesh": 3, "hit_blade": 3, "hit_wood": 2, "punch": 2, "hurt": 2,
+	"sling_throw": 2, "bow_twang": 2, "thock": 2, "land": 2, "fall": 2, "coin": 2, "find": 1, "anvil": 2, "click": 1, "page": 1}
+## The scout's four stats. Each level gives POINTS_PER_LEVEL points to put into them, and
+## HP_PER_LEVEL more health. What a point does:
+##   str   STR_DAMAGE more damage with hand weapons and fists
+##   dex   DEX_DODGE more chance to avoid a blow altogether (at most DODGE_MAX), and DEX_AIM more
+##         damage with the sling and the bow
+##   int   INT_XP more experience from everything, and prices INT_TRADE better with the trader,
+##         buying and selling (at most TRADE_MAX)
+##   luck  enemies drop things LUCK_DROPS more often (at most DROPS_MAX more)
+const STAT_ORDER := ["str", "dex", "int", "luck"]
+const STAT_LABELS := {"str": "Strength", "dex": "Dexterity", "int": "Intelligence", "luck": "Luck"}
+const POINTS_PER_LEVEL := 3
+const HP_PER_LEVEL := 4.0
+const STR_DAMAGE := 0.03
+const DEX_DODGE := 0.015
+const DODGE_MAX := 0.45
+const DEX_AIM := 0.02
+const INT_XP := 0.03
+const INT_TRADE := 0.01
+const TRADE_MAX := 0.25
+const LUCK_DROPS := 0.01
+const DROPS_MAX := 0.25
+## The day. One day in the game lasts DAY_SECONDS of play (six hours), so an hour of the day
+## passes in a quarter of an hour.
+const DAY_SECONDS := 21600.0
+## Thirst. The scout loses THIRST_PER_DAY points of it in a day (the bar is 100, so it runs dry
+## about three times a day if nothing is drunk): THIRST_SUN times as fast by day out under the
+## sun, THIRST_SHADE times by night or indoors, and THIRST_RUN times faster again while
+## sprinting. What is worn against the heat slows it: an item's "thirst" number times
+## THIRST_GEAR is the share it takes off, up to THIRST_GEAR_MAX in all.
+## Under DRY_BELOW the most stamina the scout can have shrinks, down to DRY_STAMINA_MIN of the
+## usual at nothing; at nothing, health goes at PARCHED_DAMAGE a second.
+const THIRST_PER_DAY := 300.0
+const THIRST_SUN := 1.25
+const THIRST_SHADE := 0.75
+const THIRST_RUN := 1.5
+const THIRST_GEAR := 4.0
+const THIRST_GEAR_MAX := 0.6
+const DRY_BELOW := 30.0
+const DRY_STAMINA_MIN := 0.4
+const PARCHED_DAMAGE := 0.4
+const RARITY_NAMES := ["", "Rare", "Legendary"]
+const RARITY_COLORS := [Color(1, 1, 1), Color(0.45, 0.68, 1.0), Color(1.0, 0.62, 0.15)]
 const PLUS_POWER := 0.12     # each +1 adds this much damage
 const PLUS_ARMOR := 0.15     # each +1 adds this much defense
 const DEFENSE_HALF := 40.0   # with this much defense, half of every blow is stopped
@@ -29,12 +84,40 @@ const DEFAULT_LOOK := {
 	"beard": 0, "head": 1, "outfit": 0, "cloth": 1, "sash": 0,
 }
 const DEFAULT_SETTINGS := {
-	"master": 0.8, "music": 0.55, "sensitivity": 1.0, "invert_y": false, "fov": 70.0,
+	"master": 0.8, "music": 0.55, "effects": 0.8, "sensitivity": 1.0, "invert_y": false, "fov": 70.0,
 	"fullscreen": false, "vsync": true, "shadows": true,
 }
 
+## Every time the scout sleeps a new save is written into `save_dir`; the newest MAX_SAVES are
+## kept. `save_path` is where the one save of older versions was, still read if it is there.
+const MAX_SAVES := 12
+var save_dir := "user://saves"
 var save_path := "user://save.json"
+var xp := 0                # experience toward the next level
+var level := 1
+var stat_points := 0       # points not yet put into a stat
+var stats := {"str": 0, "dex": 0, "int": 0, "luck": 0}
+## The weapon skill trees (data/skills.gd): experience in each weapon family, the points each tree
+## has not spent yet, and the skills learned (id -> true).
+## The legendary weapons found this journey (id -> true): each exists once.
+var found := {}
+## Special places (data/places.gd ids): seen at least once, and done (a landmark's passage read
+## or a lair or ruin cleared, so it is not guarded or rewarded again).
+var places_seen := {}
+var places_done := {}
+var skill_xp := {}
+var skill_points := {}
+var perks := {}
+var clock := 7.0           # the hour of the day, 0..24
+var day := 1               # which day of the journey it is
+var played := 0.0          # seconds of this journey spent playing
+var intro_seen := -1       # the last stage whose introduction has been shown
 var stage_index := 0
+## Walking in the land of an earlier stage (its index), or -1 when in the current stage's land.
+## Never saved: a journey is always picked up in the camp. `away_from` holds how far the current
+## stage had got when the scout walked back, for the return.
+var visiting := -1
+var away_from := {}
 var silver := 0
 var bronze := 0
 var hp := 100.0
@@ -69,6 +152,12 @@ var _mats := {}
 var _music: AudioStreamPlayer
 var _music_next := 0
 var _music_wait := -1.0
+var sounds_played := {}     # name -> how often it has been asked for (the tests read this)
+var _voices: Array = []     # players for sounds that come from a place in the world
+var _flat: Array = []       # players for sounds that do not (menus, things picked up)
+var _voice_next := 0
+var _last_take := {}
+var _save_count := 0
 
 
 func _ready() -> void:
@@ -81,6 +170,8 @@ func _ready() -> void:
 
 func new_game() -> void:
 	stage_index = 0
+	visiting = -1
+	away_from = {}
 	silver = 15
 	bronze = 0
 	max_water = 3
@@ -88,6 +179,20 @@ func new_game() -> void:
 	workshop = false
 	look = DEFAULT_LOOK.duplicate()
 	look_set = false
+	played = 0.0
+	intro_seen = -1
+	clock = 7.0
+	day = 1
+	xp = 0
+	level = 1
+	stat_points = 0
+	stats = {"str": 0, "dex": 0, "int": 0, "luck": 0}
+	skill_xp = {}
+	skill_points = {}
+	perks = {}
+	found = {}
+	places_seen = {}
+	places_done = {}
 	bag = []
 	pack = "pouch"
 	chest = []
@@ -101,8 +206,13 @@ func new_game() -> void:
 	begin_stage()
 
 
+## The stage whose land the scout is in: the current one, or an earlier one walked back to.
 func stage() -> Dictionary:
-	return Stages.LIST[stage_index]
+	return Stages.LIST[land_index()]
+
+
+func land_index() -> int:
+	return visiting if visiting >= 0 else stage_index
 
 
 func stage_count() -> int:
@@ -122,7 +232,216 @@ func begin_stage() -> void:
 
 
 func base_hp() -> float:
-	return 100.0 + 10.0 * stage_index
+	return 100.0 + 10.0 * stage_index + HP_PER_LEVEL * (level - 1)
+
+
+# ---------------------------------------------------------------- the day, thirst and breath
+
+## Moves the day on by `delta` seconds of play.
+func advance_clock(delta: float) -> void:
+	clock += delta * 24.0 / DAY_SECONDS
+	while clock >= 24.0:
+		clock -= 24.0
+		day += 1
+
+
+func sun_is_up() -> bool:
+	return clock >= 6.0 and clock < 18.0
+
+
+## "Day 3, 14:20".
+func clock_text() -> String:
+	var minutes := int(clock * 60.0) % 1440
+	return "Day %d, %02d:%02d" % [day, minutes / 60, minutes % 60]
+
+
+## Sleeping takes the scout to six the next morning.
+func sleep_to_morning() -> void:
+	if clock >= 6.0:
+		day += 1
+	clock = 6.0
+
+
+## Points of thirst lost in a second of play. `heat` is the stage's (1 = an ordinary desert
+## day); it tells only by day and out of doors.
+func thirst_rate(sprinting: bool, indoors: bool, heat: float = 1.0) -> float:
+	var rate := THIRST_PER_DAY / DAY_SECONDS
+	if sun_is_up() and not indoors:
+		rate *= THIRST_SUN + 0.25 * (heat - 1.0)
+	else:
+		rate *= THIRST_SHADE
+	if sprinting:
+		rate *= THIRST_RUN
+	return rate * (1.0 - minf(THIRST_GEAR_MAX, total("thirst") * THIRST_GEAR))
+
+
+## The most stamina the scout can have now: all of it, or less when dry.
+func stamina_cap() -> float:
+	if thirst >= DRY_BELOW:
+		return max_stamina
+	return max_stamina * lerpf(DRY_STAMINA_MIN, 1.0, thirst / DRY_BELOW)
+
+
+# ---------------------------------------------------------------- experience, levels and stats
+
+## Experience needed to go from `at_level` to the next.
+func xp_needed(at_level: int) -> int:
+	var n := at_level - 1
+	return 80 + 45 * n + 6 * n * n
+
+
+## Adds experience (more of it for an intelligent scout) and levels up as often as it reaches.
+## Returns what was actually gained.
+func gain_xp(amount: int) -> int:
+	if amount <= 0:
+		return 0
+	var gained := int(round(amount * (1.0 + INT_XP * int(stats["int"]))))
+	xp += gained
+	xp_gained.emit(gained)
+	while xp >= xp_needed(level):
+		xp -= xp_needed(level)
+		level += 1
+		stat_points += POINTS_PER_LEVEL
+		max_hp += HP_PER_LEVEL
+		hp = max_hp
+		say("Level %d.  You have %d points to spend: press Esc, The Scout." % [level, stat_points])
+		play_sound("find", null, 0.0, 0.8)
+		leveled.emit(level)
+	return gained
+
+
+## Puts one unspent point into a stat. False if there is none to spend.
+func spend_point(stat_name: String) -> bool:
+	if stat_points <= 0 or not stats.has(stat_name):
+		return false
+	stat_points -= 1
+	stats[stat_name] = int(stats[stat_name]) + 1
+	return true
+
+
+# ---------------------------------------------------------------- the weapon skill trees
+
+## The tree a weapon of `kind` trains: its style's, or "bow"; "" for a bare fist or a shield.
+func tree_of(kind: String) -> String:
+	if kind == "bow":
+		return "bow"
+	if kind in ["none", "shield", ""]:
+		return ""
+	return Skills.tree_of_style(str(STYLE_OF_KIND.get(kind, "sword")))
+
+
+## How many steps a weapon's skill has reached.
+func skill_step(tree: String) -> int:
+	var have := int(skill_xp.get(tree, 0))
+	var n := 0
+	while n < Skills.MAX_STEPS and have >= Skills.xp_for_step(n + 1):
+		n += 1
+	return n
+
+
+## Use teaches: adds `amount` to a weapon family's skill, and a point to its tree for every step
+## it rises. Returns the points gained.
+func train(tree: String, amount: int) -> int:
+	if tree == "" or not Skills.TREES.has(tree) or amount <= 0:
+		return 0
+	var before := skill_step(tree)
+	skill_xp[tree] = int(skill_xp.get(tree, 0)) + amount
+	var gained := skill_step(tree) - before
+	if gained > 0:
+		skill_points[tree] = int(skill_points.get(tree, 0)) + gained
+		say("%s skill rises to %d.  A point to spend in its tree: press Esc, Skills." % [Skills.TREES[tree]["name"], skill_step(tree)])
+		play_sound("find", null, -4.0, 1.2)
+	return gained
+
+
+## What felling an enemy of `kind` teaches the weapon that did it.
+func train_kill(tree: String, kind: String) -> int:
+	return train(tree, Skills.GREAT_KILL if kind in ["champion", "boss", "anak"] else Skills.KILL)
+
+
+func has_perk(id: String) -> bool:
+	return perks.has(id)
+
+
+## A learned skill's number ("v" in data/skills.gd); 0 if it is not learned.
+func perk(id: String) -> float:
+	if not perks.has(id):
+		return 0.0
+	return float((Skills.find(id)["skill"] as Dictionary).get("v", 1.0))
+
+
+## A learned skill's time ("t"); 0 if it is not learned.
+func perk_time(id: String) -> float:
+	if not perks.has(id):
+		return 0.0
+	return float((Skills.find(id)["skill"] as Dictionary).get("t", 0.0))
+
+
+## Points spent in a tree.
+func spent_in(tree: String) -> int:
+	var n := 0
+	for s in Skills.TREES[tree]["skills"]:
+		if perks.has(str(s["id"])):
+			n += int(Skills.COST[int(s["tier"])])
+	return n
+
+
+## Why a skill cannot be learned now, or "" if it can.
+func why_not(id: String) -> String:
+	var f := Skills.find(id)
+	if f.is_empty():
+		return "Unknown"
+	if perks.has(id):
+		return "Learned"
+	var tree: String = f["tree"]
+	var tier := int(f["skill"]["tier"])
+	if spent_in(tree) < int(Skills.OPENS[tier]):
+		return "Opens at %d points spent here" % int(Skills.OPENS[tier])
+	if tier == 4 and level < Skills.CAPSTONE_LEVEL:
+		return "Opens at level %d" % Skills.CAPSTONE_LEVEL
+	if int(skill_points.get(tree, 0)) < int(Skills.COST[tier]):
+		return "Needs %d point%s" % [int(Skills.COST[tier]), "" if int(Skills.COST[tier]) == 1 else "s"]
+	return ""
+
+
+## Learns a skill with the tree's points. False if it cannot be learned now.
+func learn(id: String) -> bool:
+	if why_not(id) != "":
+		return false
+	var f := Skills.find(id)
+	var tree: String = f["tree"]
+	skill_points[tree] = int(skill_points.get(tree, 0)) - int(Skills.COST[int(f["skill"]["tier"])])
+	perks[id] = true
+	return true
+
+
+## The chance that a blow aimed at the scout misses altogether.
+func dodge_chance() -> float:
+	return minf(DODGE_MAX, DEX_DODGE * int(stats["dex"]))
+
+
+## How much better the trader's prices are for the scout, 0..TRADE_MAX.
+func trade_bonus() -> float:
+	return minf(TRADE_MAX, INT_TRADE * int(stats["int"]))
+
+
+## How much more often enemies drop things, 0..DROPS_MAX.
+func drop_bonus() -> float:
+	return minf(DROPS_MAX, LUCK_DROPS * int(stats["luck"]))
+
+
+## What a stat is doing for the scout now, in words, for the menu.
+func stat_effect(stat_name: String) -> String:
+	match stat_name:
+		"str":
+			return "Blows with hand weapons and fists do %d%% more damage." % int(round(STR_DAMAGE * int(stats["str"]) * 100.0))
+		"dex":
+			return "You avoid %d%% of the blows aimed at you. Sling and bow do %d%% more damage." % [int(round(dodge_chance() * 100.0)), int(round(DEX_AIM * int(stats["dex"]) * 100.0))]
+		"int":
+			return "You gain %d%% more experience. The trader's prices are %d%% better, buying and selling." % [int(round(INT_XP * int(stats["int"]) * 100.0)), int(round(trade_bonus() * 100.0))]
+		"luck":
+			return "Enemies drop things %d%% more often." % int(round(drop_bonus() * 100.0))
+	return ""
 
 
 func say(text: String) -> void:
@@ -134,7 +453,7 @@ func say(text: String) -> void:
 func setup_input() -> void:
 	var keys := {
 		"move_forward": KEY_W, "move_back": KEY_S, "move_left": KEY_A, "move_right": KEY_D,
-		"sprint": KEY_SHIFT, "jump": KEY_SPACE, "interact": KEY_E, "drink": KEY_Q, "sheathe": KEY_R,
+		"sprint": KEY_SHIFT, "jump": KEY_SPACE, "interact": KEY_E, "drink": KEY_Q, "sheathe": KEY_R, "battle": KEY_F,
 	}
 	for action in keys:
 		if not InputMap.has_action(action):
@@ -210,7 +529,9 @@ func item_desc(inst: Dictionary) -> String:
 
 func stat_text(key: String, v: float) -> String:
 	match key:
-		"thirst", "stamina":
+		"thirst":
+			return "%d%% slower" % int(round(v * THIRST_GEAR * 100.0))
+		"stamina":
 			return "%+.2f/s" % v if absf(v) < 0.1 else "%+.1f/s" % v
 		"hp":
 			return "%+d" % int(round(v))
@@ -271,22 +592,24 @@ func melee_power(hand: String = "") -> float:
 	if hand == "":
 		hand = "hand_r" if not weapon_in("hand_r").is_empty() else "hand_l"
 	var w := weapon_in(hand)
-	return FIST_DAMAGE if w.is_empty() else stat(w, "damage")
+	return (FIST_DAMAGE if w.is_empty() else stat(w, "damage")) * (1.0 + STR_DAMAGE * int(stats["str"]))
 
 
-## How fast a weapon swings: a 1.5 kg weapon at normal speed, lighter ones quicker, heavier slower.
+## How fast a weapon swings: a 1.5 kg weapon at normal speed, lighter ones up to a fifth quicker,
+## heavier ones up to a fifth slower (most of a blow is the body moving, whatever the weapon). A
+## bare fist is quicker still.
 func swing_speed(inst: Dictionary) -> float:
 	if inst.is_empty():
-		return 1.3
-	return clampf(sqrt(1.5 / maxf(0.1, float(item_def(inst).get("weight", 1.5)))), 0.6, 1.5)
+		return 1.5
+	return clampf(pow(1.5 / maxf(0.1, float(item_def(inst).get("weight", 1.5))), 0.35), 0.8, 1.2)
 
 
 func sling_power() -> float:
-	return stat(equipped.get("sling", {}), "damage")
+	return stat(equipped.get("sling", {}), "damage") * (1.0 + DEX_AIM * int(stats["dex"]))
 
 
 func bow_power() -> float:
-	return stat(bow(), "damage")
+	return stat(bow(), "damage") * (1.0 + DEX_AIM * int(stats["dex"]))
 
 
 ## Defense from everything worn and held.
@@ -539,12 +862,26 @@ func try_buy_stones() -> bool:
 
 # ---------------------------------------------------------------- equipment
 
+## Swords and spears are fought with alone, in the right hand: never in the left, and while one is
+## in the right the left holds no other weapon (a shield or a bow, or nothing).
+const LONE_WEAPONS := ["sword", "sword_short", "sword_long", "spear", "spear_long"]
+
+
+## Whether `inst` is a weapon for the left hand to fight with (not a shield or a bow).
+func _second_weapon(inst: Dictionary) -> bool:
+	return not inst.is_empty() and not kind(inst) in ["none", "shield", "bow"]
+
+
 ## Whether `inst` can be worn in `slot` at all.
 func slot_accepts(slot: String, inst: Dictionary) -> bool:
 	var s: String = item_def(inst)["slot"]
+	if s == "loot":
+		return false      # spoils are only carried and sold
 	match slot:
-		"hand_r", "hand_l":
+		"hand_r":
 			return s == "hand"
+		"hand_l":
+			return s == "hand" and not LONE_WEAPONS.has(kind(inst))
 		"top":
 			return s == "top" or s == "body"
 		_:
@@ -588,6 +925,10 @@ func _clashes(inst: Dictionary, slot: String) -> Array:
 	if is_two_handed(inst):
 		out.append("hand_l")
 	if slot == "hand_l" and is_two_handed(equipped["hand_r"]):
+		out.append("hand_r")
+	if slot == "hand_r" and LONE_WEAPONS.has(kind(inst)) and _second_weapon(equipped["hand_l"]):
+		out.append("hand_l")
+	if slot == "hand_l" and _second_weapon(inst) and LONE_WEAPONS.has(kind(equipped["hand_r"])):
 		out.append("hand_r")
 	if item_def(inst)["slot"] == "body":
 		out.append("bottom")
@@ -692,6 +1033,48 @@ func try_upgrade(inst: Dictionary) -> bool:
 	return true
 
 
+## What the smith can forge at this stage: the lines of data/forge.gd within `tier_cap`.
+func forge_list(tier_cap: int) -> Array:
+	var out: Array = []
+	for r in Forge.RECIPES:
+		if Items.ITEMS.has(r["item"]) and int(Items.ITEMS[r["item"]]["tier"]) <= tier_cap:
+			out.append(r)
+	return out
+
+
+## The first item in the bag with this id ({} if there is none).
+func bag_item(id: String) -> Dictionary:
+	for it in bag:
+		if it["id"] == id:
+			return it
+	return {}
+
+
+func can_forge(recipe: Dictionary) -> bool:
+	if silver < int(recipe["silver"]) or bronze < int(recipe["bronze"]):
+		return false
+	if recipe.has("needs"):
+		# What he works from leaves the bag, which makes the room for what comes back.
+		return not bag_item(str(recipe["needs"])).is_empty()
+	return can_take(str(recipe["item"]))
+
+
+## The smith makes the thing: the silver, the bronze and whatever he works from are spent, and
+## the new piece goes into the bag. False if something is lacking or the bag is full.
+func try_forge(recipe: Dictionary) -> bool:
+	if not can_forge(recipe):
+		return false
+	if recipe.has("needs"):
+		remove_from(bag, bag_item(str(recipe["needs"])))
+		if not can_take(str(recipe["item"])):
+			add_item(str(recipe["needs"]))
+			return false
+	silver -= int(recipe["silver"])
+	bronze -= int(recipe["bronze"])
+	add_item(str(recipe["item"]))
+	return true
+
+
 ## What the trader has at this stage: the newest gear and the gear just before it.
 func shop_stock(tier_cap: int) -> Array:
 	var out: Array = []
@@ -716,13 +1099,19 @@ func shop_grid(tier_cap: int) -> Array:
 	return out
 
 
+## What the trader asks of this scout: the listed price, less for one who bargains well. Rare
+## and legendary finds have no listed price: a caravan asks Encounters.price_of for them.
 func price(inst: Dictionary) -> int:
-	return int(item_def(inst)["price"])
+	var d := item_def(inst)
+	var base: int = int(d["price"])
+	if base <= 0 and rarity(inst) > 0:
+		base = Encounters.price_of(int(d["tier"]), rarity(inst))
+	return int(ceil(base * (1.0 - trade_bonus())))
 
 
 ## Buys something into the bag. False if it costs too much or will not fit.
 func try_buy(id: String) -> bool:
-	var cost: int = int(Items.ITEMS[id]["price"])
+	var cost: int = price(new_item(id))
 	if silver < cost or not can_take(id):
 		return false
 	silver -= cost
@@ -734,10 +1123,12 @@ func sell_value(inst: Dictionary) -> int:
 	var d := item_def(inst)
 	if d.has("stack"):
 		return 0
+	if d.has("worth"):
+		return int(round(int(d["worth"]) * (1.0 + trade_bonus())))
 	var base: int = int(d["price"])
 	if base <= 0:
 		base = int(d["tier"]) * 60
-	return int(base * 0.35 * (1.0 + 0.25 * int(inst["plus"])))
+	return int(base * 0.35 * (1.0 + 0.25 * int(inst["plus"])) * (1.0 + trade_bonus()))
 
 
 func sell(inst: Dictionary) -> bool:
@@ -760,6 +1151,65 @@ func try_buy_waterskin() -> bool:
 	max_water += 1
 	water += 1
 	return true
+
+
+## A legendary weapon is in the scout's hands: it will not be found again this journey.
+func record_find(id: String) -> void:
+	if Items.ITEMS.has(id) and int(Items.ITEMS[id].get("rarity", 0)) == 2:
+		found[id] = true
+
+
+## True if this legendary has already been found this journey.
+func was_found(id: String) -> bool:
+	return found.has(id)
+
+
+## 0 common, 1 rare, 2 legendary (Items "rarity").
+func rarity(inst: Dictionary) -> int:
+	return int(item_def(inst).get("rarity", 0))
+
+
+## What an enemy of `kind` leaves when it falls, rolled from data/drops.gd: a list of
+## [pickup kind, payload] ("silver"/"bronze" with a number, "item" with an item id).
+func roll_drops(kind: String, tier_cap: int, mult: float) -> Array:
+	var out: Array = []
+	for line in Drops.DROPS.get(kind, []):
+		# A lucky scout finds a little more.
+		if rng.randf() >= float(line.get("chance", 1.0)) * (1.0 + drop_bonus()):
+			continue
+		if line.has("silver"):
+			var n := int(rng.randi_range(int(line["silver"][0]), int(line["silver"][1])) * (0.6 + 0.4 * mult))
+			if n > 0:
+				out.append(["silver", n])
+		if line.has("bronze"):
+			out.append(["bronze", rng.randi_range(int(line["bronze"][0]), int(line["bronze"][1]))])
+		if line.has("item"):
+			out.append(["item", str(line["item"])])
+		if bool(line.get("gear", false)):
+			var id := roll_drop(tier_cap)
+			if id != "":
+				out.append(["item", id])
+		if line.has("table"):
+			var found := roll_table(str(line["table"]), tier_cap)
+			if found != "":
+				out.append(["item", found])
+	return out
+
+
+## One thing from a Drops table, by weight, among those of at most one tier above `tier_cap`.
+func roll_table(table: String, tier_cap: int) -> String:
+	var pool: Array = []
+	var sum := 0.0
+	for entry in Drops.TABLES.get(table, []):
+		if int(Items.ITEMS[entry[0]]["tier"]) <= tier_cap + 1:
+			pool.append(entry)
+			sum += float(entry[1])
+	var at := rng.randf() * sum
+	for entry in pool:
+		at -= float(entry[1])
+		if at <= 0.0:
+			return str(entry[0])
+	return ""
 
 
 ## Picks a random piece of gear a raider might carry at this tier. "" if nothing fits.
@@ -806,11 +1256,18 @@ func snapshot() -> Dictionary:
 		"bag": bag.duplicate(true), "equipped": equipped.duplicate(true),
 		"look": look.duplicate(), "look_set": look_set,
 		"pack": pack, "chest": chest.duplicate(true),
+		"played": played, "intro_seen": intro_seen,
+		"xp": xp, "level": level, "stat_points": stat_points, "stats": stats.duplicate(),
+		"skill_xp": skill_xp.duplicate(), "skill_points": skill_points.duplicate(), "perks": perks.keys(), "found": found.keys(),
+		"places_seen": places_seen.keys(), "places_done": places_done.keys(),
+		"clock": clock, "day": day,
 	}
 
 
 func restore(s: Dictionary) -> void:
 	stage_index = clampi(int(s.get("stage_index", 0)), 0, stage_count() - 1)
+	visiting = -1
+	away_from = {}
 	silver = int(s.get("silver", 0))
 	bronze = int(s.get("bronze", 0))
 	max_water = int(s.get("max_water", 3))
@@ -822,6 +1279,40 @@ func restore(s: Dictionary) -> void:
 		if saved_look.has(key):
 			look[key] = int(saved_look[key])
 	look_set = bool(s.get("look_set", false))
+	played = float(s.get("played", 0.0))
+	clock = clampf(float(s.get("clock", 7.0)), 0.0, 23.999)
+	day = maxi(1, int(s.get("day", 1)))
+	xp = int(s.get("xp", 0))
+	level = maxi(1, int(s.get("level", 1)))
+	stat_points = int(s.get("stat_points", 0))
+	stats = {"str": 0, "dex": 0, "int": 0, "luck": 0}
+	var saved_stats: Dictionary = s.get("stats", {})
+	for key in stats:
+		stats[key] = int(saved_stats.get(key, 0))
+	skill_xp = {}
+	skill_points = {}
+	perks = {}
+	var saved_xp: Dictionary = s.get("skill_xp", {})
+	var saved_points: Dictionary = s.get("skill_points", {})
+	for tree in Skills.ORDER:
+		if saved_xp.has(tree):
+			skill_xp[tree] = int(saved_xp[tree])
+		if saved_points.has(tree):
+			skill_points[tree] = int(saved_points[tree])
+	for id in s.get("perks", []):
+		if not Skills.find(str(id)).is_empty():
+			perks[str(id)] = true
+	found = {}
+	for id in s.get("found", []):
+		found[str(id)] = true
+	places_seen = {}
+	places_done = {}
+	for id in s.get("places_seen", []):
+		places_seen[str(id)] = true
+	for id in s.get("places_done", []):
+		places_done[str(id)] = true
+	# A save from before introductions were remembered has seen its own stage's.
+	intro_seen = int(s.get("intro_seen", stage_index))
 	pack = str(s.get("pack", "pouch"))
 	if not Items.PACKS.has(pack):
 		pack = "pouch"
@@ -847,10 +1338,20 @@ func restore(s: Dictionary) -> void:
 			equipped["top"] = new_item("linen_tunic")
 		equipped["bottom"] = new_item("linen_kilt")
 		equipped["belt"] = new_item("rope_girdle")
+	var lone_r := LONE_WEAPONS.has(kind(equipped["hand_r"]))
+	if (is_two_handed(equipped["hand_r"]) and not equipped["hand_l"].is_empty()) 			or LONE_WEAPONS.has(kind(equipped["hand_l"])) or (lone_r and _second_weapon(equipped["hand_l"])):
+		# Saved before this weapon took both hands, or before swords and spears were held alone:
+		# what the left hand held goes into the bag.
+		spill.append(equipped["hand_l"])
+		equipped["hand_l"] = {}
 	bag = _grid_list(s.get("bag", []), bag_grid(), spill)
 	chest = _grid_list(s.get("chest", []), chest_grid(), [])
-	if s.has("stones"):
-		take_ammo("stones", int(s["stones"]))
+	for it in spill.duplicate():
+		if place(bag, bag_grid(), it) == 0:
+			spill.erase(it)
+	if eq.has("melee"):
+		# Stones were counted, not laid out; saves from before stones existed get the starting ten.
+		take_ammo("stones", int(s.get("stones", START_STONES)))
 		place(chest, chest_grid(), new_item("stones", 0, int(s.get("chest_stones", 0))))
 	for it in spill:
 		place(chest, chest_grid(), it)
@@ -883,28 +1384,89 @@ func _grid_list(list: Array, grid: Vector2i, spill: Array) -> Array:
 
 
 func has_save() -> bool:
-	return FileAccess.file_exists(save_path)
+	return not list_saves().is_empty()
 
 
-## Writes the save file. The game is saved only by sleeping in the scout's own tent; `progress`
+## Every save there is, newest first, for the menus: {path, saved_at (unix seconds), stage_index,
+## obj_done, silver, played}. A save of an older version (one file, no date inside) is listed
+## with the time the file was written.
+func list_saves() -> Array:
+	var paths: Array = []
+	var dir := DirAccess.open(save_dir)
+	if dir != null:
+		for file in dir.get_files():
+			if file.ends_with(".json"):
+				paths.append(save_dir.path_join(file))
+	if FileAccess.file_exists(save_path):
+		paths.append(save_path)
+	var out: Array = []
+	for path in paths:
+		var data: Variant = JSON.parse_string(FileAccess.get_file_as_string(path))
+		if typeof(data) != TYPE_DICTIONARY:
+			continue
+		out.append({
+			"path": path,
+			"saved_at": float(data.get("saved_at", FileAccess.get_modified_time(path))),
+			"stage_index": clampi(int(data.get("stage_index", 0)), 0, stage_count() - 1),
+			"obj_done": int((data.get("resume", {}) as Dictionary).get("obj_done", 0)),
+			"silver": int(data.get("silver", 0)),
+			"played": float(data.get("played", 0.0)),
+		})
+	out.sort_custom(func(a, b) -> bool:
+		if a["saved_at"] != b["saved_at"]:
+			return a["saved_at"] > b["saved_at"]
+		return str(a["path"]) > str(b["path"]))
+	return out
+
+
+## What the newest save holds, without loading it ({} if there is none), for the title screen.
+func peek_save() -> Dictionary:
+	var saves := list_saves()
+	if saves.is_empty():
+		return {}
+	var data: Variant = JSON.parse_string(FileAccess.get_file_as_string(saves[0]["path"]))
+	return data if typeof(data) == TYPE_DICTIONARY else {}
+
+
+## Writes a new save. The game is saved only by sleeping in the scout's own tent; `progress`
 ## is where the stage stood then ({obj_done, hp, thirst, water}), so loading picks it up there.
+## Older saves stay, so an earlier morning can be gone back to; beyond MAX_SAVES the oldest go.
 func save_game(progress: Dictionary = {}) -> void:
 	var data := snapshot()
 	data["resume"] = progress
-	var f := FileAccess.open(save_path, FileAccess.WRITE)
+	data["saved_at"] = Time.get_unix_time_from_system()
+	DirAccess.make_dir_recursive_absolute(save_dir)
+	_save_count += 1
+	var stamp := Time.get_datetime_string_from_system().replace(":", "-").replace("T", "_")
+	var f := FileAccess.open(save_dir.path_join("save_%s_%03d.json" % [stamp, _save_count % 1000]), FileAccess.WRITE)
 	if f:
 		f.store_string(JSON.stringify(data))
 		f.close()
+	var saves := list_saves()
+	for i in range(MAX_SAVES, saves.size()):
+		DirAccess.remove_absolute(str(saves[i]["path"]))
 
 
-func load_game() -> bool:
-	if not has_save():
+## Loads the save at `path`, or the newest one if no path is given.
+func load_game(path: String = "") -> bool:
+	if path == "":
+		var saves := list_saves()
+		if saves.is_empty():
+			return false
+		path = saves[0]["path"]
+	if not FileAccess.file_exists(path):
 		return false
-	var data: Variant = JSON.parse_string(FileAccess.get_file_as_string(save_path))
+	var data: Variant = JSON.parse_string(FileAccess.get_file_as_string(path))
 	if typeof(data) != TYPE_DICTIONARY:
 		return false
 	restore(data)
 	return true
+
+
+## Removes every save (the tests start from none).
+func clear_saves() -> void:
+	for s in list_saves():
+		DirAccess.remove_absolute(str(s["path"]))
 
 
 # ---------------------------------------------------------------- settings and music
@@ -933,10 +1495,11 @@ func set_setting(key: String, value: Variant) -> void:
 
 func apply_settings() -> void:
 	AudioServer.set_bus_volume_db(0, linear_to_db(maxf(0.0001, float(settings["master"]))))
-	var music := AudioServer.get_bus_index("Music")
-	if music >= 0:
-		AudioServer.set_bus_volume_db(music, linear_to_db(maxf(0.0001, float(settings["music"]))))
-		AudioServer.set_bus_mute(music, float(settings["music"]) <= 0.001)
+	for bus in [["Music", "music"], ["Effects", "effects"]]:
+		var i := AudioServer.get_bus_index(bus[0])
+		if i >= 0:
+			AudioServer.set_bus_volume_db(i, linear_to_db(maxf(0.0001, float(settings[bus[1]]))))
+			AudioServer.set_bus_mute(i, float(settings[bus[1]]) <= 0.001)
 	AudioServer.set_bus_mute(0, float(settings["master"]) <= 0.001)
 	if DisplayServer.get_name() != "headless":
 		var full: bool = bool(settings["fullscreen"])
@@ -949,25 +1512,71 @@ func apply_settings() -> void:
 	settings_changed.emit()
 
 
-## The music has a bus of its own so its volume can be set apart from the rest.
+## Music and sound effects have buses of their own, so their volumes can be set apart.
 func _setup_audio() -> void:
-	if AudioServer.get_bus_index("Music") < 0:
-		AudioServer.add_bus()
-		var i := AudioServer.bus_count - 1
-		AudioServer.set_bus_name(i, "Music")
-		AudioServer.set_bus_send(i, "Master")
+	for bus in ["Music", "Effects"]:
+		if AudioServer.get_bus_index(bus) < 0:
+			AudioServer.add_bus()
+			var i := AudioServer.bus_count - 1
+			AudioServer.set_bus_name(i, bus)
+			AudioServer.set_bus_send(i, "Master")
 	_music = AudioStreamPlayer.new()
 	_music.bus = "Music"
 	_music.process_mode = Node.PROCESS_MODE_ALWAYS
 	add_child(_music)
 	_music.finished.connect(func() -> void: _music_wait = rng.randf_range(MUSIC_GAP.x, MUSIC_GAP.y))
 	_music_next = rng.randi() % MUSIC.size()
+	for i in 10:
+		var v := AudioStreamPlayer3D.new()
+		v.bus = "Effects"
+		v.unit_size = 6.0
+		v.max_distance = 70.0
+		add_child(v)
+		_voices.append(v)
+	for i in 4:
+		var v := AudioStreamPlayer.new()
+		v.bus = "Effects"
+		v.process_mode = Node.PROCESS_MODE_ALWAYS
+		add_child(v)
+		_flat.append(v)
 	# No music for headless runs (the self-test).
 	_music_wait = -1.0 if DisplayServer.get_name() == "headless" else 2.0
 
 
+## Plays one of the short sounds (SOUND_TAKES): at `at` in the world if a place is given, or
+## plainly, as the menus' sounds are. Each time a different take is picked and its pitch is
+## shifted a little, so the same sound twice does not sound the same.
+func play_sound(sound: String, at: Variant = null, volume_db: float = 0.0, pitch: float = 1.0) -> void:
+	sounds_played[sound] = int(sounds_played.get(sound, 0)) + 1
+	if not SOUND_TAKES.has(sound) or DisplayServer.get_name() == "headless":
+		return
+	var takes: int = SOUND_TAKES[sound]
+	var take := 1 + randi() % takes
+	if takes > 1 and take == int(_last_take.get(sound, 0)):
+		take = take % takes + 1
+	_last_take[sound] = take
+	var path := "res://assets/sounds/%s_%d.wav" % [sound, take]
+	if not ResourceLoader.exists(path):
+		return
+	_voice_next += 1
+	if at is Vector3:
+		var v: AudioStreamPlayer3D = _voices[_voice_next % _voices.size()]
+		v.stream = load(path)
+		v.pitch_scale = pitch * randf_range(0.93, 1.07)
+		v.volume_db = volume_db
+		v.global_position = at
+		v.play()
+	else:
+		var v: AudioStreamPlayer = _flat[_voice_next % _flat.size()]
+		v.stream = load(path)
+		v.pitch_scale = pitch * randf_range(0.97, 1.03)
+		v.volume_db = volume_db
+		v.play()
+
+
 ## Plays the pieces in turn, with a quiet stretch between them.
 func _process(delta: float) -> void:
+	played += delta      # this node stops while the game is paused, so menus do not count
 	if _music_wait < 0.0:
 		return
 	_music_wait -= delta
@@ -1222,6 +1831,7 @@ func mesh_capsule(radius: float, height: float, color: Color) -> MeshInstance3D:
 func label3d(text: String, size: int = 48, color: Color = Color.WHITE) -> Label3D:
 	var l := Label3D.new()
 	l.text = text
+	l.font = preload("res://scripts/ui.gd").font("bold")
 	l.font_size = size
 	l.pixel_size = 0.006
 	l.outline_size = 10

@@ -7,14 +7,22 @@ extends Node3D
 ## [grass, bushes, trees, rocks], where 1.0 is an average stretch of wilderness.
 
 const SPREAD := 285.0     # plants are placed out to this distance from the camp
+## Stones at least this big (their scale) cannot be walked through; smaller ones are pebbles.
+const SOLID_ROCK := 0.35
 
 static var _rocks: Array = []
+static var _rock_points: Array = []   # per rock shape: its corners, for the collision hull
 static var _tuft: ArrayMesh
 static var _bush: ArrayMesh
 static var _acacia: ArrayMesh
 
 var counts := {"grass": 0, "bushes": 0, "trees": 0, "rocks": 0, "solid": 0}
 var clear := 30.0         # nothing is placed this close to the middle of the camp
+var _solids: Array = []   # [x, z, radius, height of its top] of everything solid (clear_of, tests)
+
+
+## Circles kept clear of rocks and plants: [centre (Vector2), radius], such as the special places.
+var avoid: Array = []
 
 
 func build(stage: Dictionary, rng: RandomNumberGenerator, terrain, keep_clear: float = 30.0) -> void:
@@ -55,6 +63,9 @@ func build(stage: Dictionary, rng: RandomNumberGenerator, terrain, keep_clear: f
 			s = rng.randf_range(0.7, 1.3)
 		xf.append(Transform3D(Basis(Vector3.UP, rng.randf() * TAU).scaled(Vector3(s, s * rng.randf_range(0.7, 1.0), s)), p))
 		tint.append(Color(0.36, 0.42, 0.26).lerp(Color(0.52, 0.46, 0.3), rng.randf()))
+		if s >= 1.4:
+			# The woody middle of a big bush is solid; its outer twigs give way.
+			_solid(p + Vector3(0, 0.3 * s, 0), Vector3(0.7 * s, 0.6 * s, 0.7 * s))
 	_batch("Bushes", _bush, xf, tint, false)
 	counts["bushes"] = xf.size()
 
@@ -86,11 +97,12 @@ func build(stage: Dictionary, rng: RandomNumberGenerator, terrain, keep_clear: f
 				s = rng.randf_range(0.5, 1.4)
 			var squash := Vector3(s * rng.randf_range(0.8, 1.5), s * rng.randf_range(0.6, 1.1), s * rng.randf_range(0.8, 1.5))
 			var basis := Basis.from_euler(Vector3(rng.randf_range(-0.2, 0.2), rng.randf() * TAU, rng.randf_range(-0.2, 0.2))).scaled(squash)
-			xf.append(Transform3D(basis, p + Vector3(0, squash.y * 0.25, 0)))
+			var at := Transform3D(basis, p + Vector3(0, squash.y * 0.25, 0))
+			xf.append(at)
 			tint.append(rock_c.darkened(rng.randf_range(0.0, 0.3)))
-			if s > 1.5:
-				_solid(p + Vector3(0, squash.y * 0.35, 0), squash * 1.35)
-		_batch("Rocks%d" % shape, _rocks[shape], xf, tint, false)
+			if s >= SOLID_ROCK:
+				_solid_rock(at, shape, maxf(squash.x, squash.z))
+		_batch("Rocks%d" % shape, _rocks[shape], xf, tint, false, true)
 		counts["rocks"] += xf.size()
 
 
@@ -103,13 +115,16 @@ func _spot(rng: RandomNumberGenerator, terrain, sink: float = 0.02) -> Vector3:
 		return Vector3.INF
 	var x := sin(a) * r
 	var z := cos(a) * r
+	for c in avoid:
+		if Vector2(x, z).distance_to(c[0]) < float(c[1]):
+			return Vector3.INF
 	var y: float = terrain.surface_y(x, z)
 	if y < float(terrain.water_y(x, z)) + 0.3:
 		return Vector3.INF
 	return Vector3(x, y - sink, z)
 
 
-func _batch(batch_name: String, mesh: Mesh, xforms: Array, tints: Array, two_sided: bool) -> void:
+func _batch(batch_name: String, mesh: Mesh, xforms: Array, tints: Array, two_sided: bool, stone: bool = false) -> void:
 	if xforms.is_empty():
 		return
 	var mm := MultiMesh.new()
@@ -131,22 +146,64 @@ func _batch(batch_name: String, mesh: Mesh, xforms: Array, tints: Array, two_sid
 		m.roughness = 0.95
 		if two_sided:
 			m.cull_mode = BaseMaterial3D.CULL_DISABLED
+		if stone:
+			# Weathered rock: mottled and pitted, laid on in world space so a stone squashed
+			# out of shape does not stretch it.
+			m.albedo_texture = Game._texture("rough")
+			m.normal_enabled = true
+			m.normal_texture = Game._texture("speckle_relief")
+			m.normal_scale = 1.4
+			m.uv1_triplanar = true
+			m.uv1_world_triplanar = true
+			m.uv1_scale = Vector3.ONE * 0.9
 		node.material_override = m
 	add_child(node)
 
 
 func _solid(center: Vector3, box: Vector3) -> void:
+	var shape := BoxShape3D.new()
+	shape.size = box
+	_body(shape, center, maxf(box.x, box.z) * 0.5, center.y + box.y * 0.5)
+
+
+## A stone's collision is its own shape (the hull of its corners, turned and squashed as the
+## stone is), so the scout stops at what is seen and can stand on top of it.
+func _solid_rock(at: Transform3D, shape_index: int, radius: float) -> void:
+	var points := PackedVector3Array()
+	for v in _rock_points[shape_index]:
+		points.append(at.basis * v)
+	var hull := ConvexPolygonShape3D.new()
+	hull.points = points
+	var top := 0.0
+	for q in points:
+		top = maxf(top, q.y)
+	_body(hull, at.origin, radius, at.origin.y + top)
+
+
+func _body(shape: Shape3D, center: Vector3, radius: float, top: float) -> void:
 	var sb := StaticBody3D.new()
 	sb.collision_layer = 1
 	sb.collision_mask = 0
 	var cs := CollisionShape3D.new()
-	var shape := BoxShape3D.new()
-	shape.size = box
 	cs.shape = shape
 	sb.add_child(cs)
 	add_child(sb)
 	sb.position = center
+	_solids.append([center.x, center.z, radius, top])
 	counts["solid"] += 1
+
+
+## `p` moved out of any rock, bush or tree it lies inside, so nothing is put where it cannot be
+## seen or reached. The height is left alone.
+func clear_of(p: Vector3, margin: float = 0.5) -> Vector3:
+	for s in _solids:
+		var off := Vector2(p.x - float(s[0]), p.z - float(s[1]))
+		var need: float = float(s[2]) + margin
+		if off.length() < need:
+			var dir := off.normalized() if off.length() > 0.01 else Vector2(1, 0)
+			p.x = float(s[0]) + dir.x * need
+			p.z = float(s[1]) + dir.y * need
+	return p
 
 
 # ---------------------------------------------------------------- meshes, made once
@@ -156,6 +213,10 @@ static func _make_meshes() -> void:
 		return
 	for i in 3:
 		_rocks.append(_rock_mesh(40 + i))
+		var corners := {}
+		for v in (_rocks[i] as ArrayMesh).surface_get_arrays(0)[Mesh.ARRAY_VERTEX]:
+			corners[(v as Vector3).snappedf(0.001)] = true
+		_rock_points.append(corners.keys())
 	_tuft = _tuft_mesh()
 	_bush = _bush_mesh()
 	_acacia = _acacia_mesh()

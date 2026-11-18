@@ -8,6 +8,9 @@ const HumanScript := preload("res://scripts/human.gd")
 const MinimapScript := preload("res://scripts/minimap.gd")
 const RegionMapScript := preload("res://scripts/region_map.gd")
 const InventoryScript := preload("res://scripts/inventory_ui.gd")
+const MenuScript := preload("res://scripts/menu.gd")
+const GaugeScript := preload("res://scripts/gauge.gd")
+const Ui := preload("res://scripts/ui.gd")
 
 var world
 var auto := false         # test mode: a dialog picks its first option at once and never shows
@@ -15,12 +18,15 @@ var no_capture := false   # test mode: leave the mouse alone
 var last_dialog := ""
 var minimap: Control       # the round map in the top-right corner
 
-var _hp: ProgressBar
-var _thirst: ProgressBar
-var _stamina: ProgressBar
+var _hp: Control            # the bars (gauge.gd), each with its name and numbers inside it
+var _thirst: Control       # ... with the drinks left in the waterskin as drops after it
+var _stamina: Control
+var _xp: Control           # the level, and the experience toward the next
+var _points: Label         # "3 points to spend", while there are any
+var _xp_note := ""         # "+20" for a moment after experience is gained
+var _xp_note_left := 0.0
 var _stones: Label
-var _camp: ProgressBar
-var _camp_label: Label
+var _camp: Control         # the camp's strength, shown while it is raided
 var _stats: Label
 var _stage: Label
 var _objective: Label
@@ -41,6 +47,7 @@ var _coords: Label
 var _map_panel: PanelContainer
 var _region: Control
 var _map_note: Label
+var _map_travel: HFlowContainer   # the ways to earlier lands, or back to the camp
 var _panel_style: StyleBoxFlat
 var _creator: PanelContainer
 var _creator_values := {}
@@ -50,8 +57,7 @@ var _creator_done := Callable()
 var _creator_face := false
 var inventory               # the bag, gear, chest and trader screens (inventory_ui.gd)
 var _left: VBoxContainer     # the bars and counts in the top-left corner
-var _settings: PanelContainer
-var _setting_rows := {}
+var menu                    # the pause menu: journey, how to play, saves, settings (menu.gd)
 
 
 func _ready() -> void:
@@ -62,6 +68,7 @@ func _ready() -> void:
 	var root := Control.new()
 	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	root.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	root.theme = Ui.theme()
 	add_child(root)
 
 	_hurt = ColorRect.new()
@@ -81,23 +88,23 @@ func _ready() -> void:
 	left.add_theme_constant_override("separation", 4)
 	left.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	root.add_child(left)
-	left.add_child(_text("Health", 15))
-	_hp = _bar(Color(0.78, 0.22, 0.16))
-	left.add_child(_hp)
-	left.add_child(_text("Thirst", 15))
-	_thirst = _bar(Color(0.22, 0.56, 0.86))
-	left.add_child(_thirst)
-	left.add_child(_text("Stamina", 15))
-	_stamina = _bar(Color(0.86, 0.74, 0.22))
-	left.add_child(_stamina)
+	_hp = _gauge(left, Color(0.8, 0.2, 0.15), "heart", 36.0)
+	_hp.warn_below = 0.3
+	_thirst = _gauge(left, Color(0.2, 0.52, 0.86), "drop", 30.0)
+	_thirst.warn_below = 0.25
+	_stamina = _gauge(left, Color(0.82, 0.66, 0.16), "bolt", 30.0)
+	_xp = _gauge(left, Color(0.55, 0.36, 0.7), "star", 26.0)
+	_points = _text("", 15, Color(1.0, 0.88, 0.58))
+	left.add_child(_points)
+	Game.xp_gained.connect(func(amount: int) -> void:
+		_xp_note = "+%d" % amount
+		_xp_note_left = 2.0)
 	_stones = _text("", 18)
 	left.add_child(_stones)
 	_stats = _text("", 17)
 	left.add_child(_stats)
-	_camp_label = _text("Camp under attack", 15, Color(1.0, 0.6, 0.5))
-	left.add_child(_camp_label)
-	_camp = _bar(Color(0.9, 0.65, 0.2))
-	left.add_child(_camp)
+	_camp = _gauge(left, Color(0.88, 0.5, 0.16), "tent", 30.0)
+	_camp.warn_below = 0.35
 
 	var top := VBoxContainer.new()
 	_anchor(top, 0.5, 0.5, 0.0, 0.0, -500, 500, 14, 14)
@@ -143,19 +150,15 @@ func _ready() -> void:
 	_panel = PanelContainer.new()
 	_anchor(_panel, 0.5, 0.5, 1.0, 1.0, -460, 460, -36, -36)
 	_panel.grow_vertical = Control.GROW_DIRECTION_BEGIN
-	var sb := StyleBoxFlat.new()
-	sb.bg_color = Color(0.09, 0.07, 0.05, 0.94)
-	sb.border_color = Color(0.75, 0.6, 0.35)
-	sb.set_border_width_all(2)
-	sb.set_corner_radius_all(8)
-	sb.set_content_margin_all(20)
+	var sb := Ui.panel_style(22.0)
 	_panel.add_theme_stylebox_override("panel", sb)
 	_panel_style = sb
 	var v := VBoxContainer.new()
 	v.add_theme_constant_override("separation", 10)
 	_panel.add_child(v)
-	_title = _text("", 24, Color(1.0, 0.85, 0.5))
+	_title = Ui.label("", 25, Ui.GOLD, "bold")
 	v.add_child(_title)
+	v.add_child(Ui.rule())
 	_body = RichTextLabel.new()
 	_body.bbcode_enabled = true
 	_body.fit_content = true
@@ -172,7 +175,9 @@ func _ready() -> void:
 	root.add_child(_panel)
 	_build_creator(root)
 	_build_map(root)
-	_build_settings(root)
+	menu = MenuScript.new()
+	menu.hud = self
+	add_child(menu)
 	inventory = InventoryScript.new()
 	root.add_child(inventory)
 
@@ -193,43 +198,53 @@ func _text(text: String, size: int, color: Color = Color.WHITE) -> Label:
 	l.text = text
 	l.add_theme_font_size_override("font_size", size)
 	l.add_theme_color_override("font_color", color)
-	l.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.85))
-	l.add_theme_constant_override("outline_size", 5)
+	# Read over sand and sky alike: a thin dark edge and a soft shadow under each letter.
+	l.add_theme_color_override("font_outline_color", Color(0.05, 0.03, 0.02, 0.9))
+	l.add_theme_constant_override("outline_size", 4)
+	l.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.55))
+	l.add_theme_constant_override("shadow_offset_x", 1)
+	l.add_theme_constant_override("shadow_offset_y", 2)
+	l.add_theme_constant_override("shadow_outline_size", 4)
 	l.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	return l
 
 
-func _bar(color: Color) -> ProgressBar:
-	var b := ProgressBar.new()
-	b.custom_minimum_size = Vector2(270, 16)
-	# Keep the bar its own width: the text lines in the same column change length as you turn.
-	b.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
-	b.show_percentage = false
-	b.max_value = 100.0
-	var fill := StyleBoxFlat.new()
-	fill.bg_color = color
-	fill.set_corner_radius_all(3)
-	var bg := StyleBoxFlat.new()
-	bg.bg_color = Color(0, 0, 0, 0.5)
-	bg.set_corner_radius_all(3)
-	b.add_theme_stylebox_override("fill", fill)
-	b.add_theme_stylebox_override("background", bg)
-	b.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	return b
+## One of the bars in the corner (gauge.gd), added to `parent`.
+func _gauge(parent: Control, color: Color, emblem: String, height: float) -> Control:
+	var g = GaugeScript.new()
+	g.color = color
+	g.emblem = emblem
+	g.custom_minimum_size = Vector2(380, height)
+	# Keep the bar its own width: the text lines in the same column change length.
+	g.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	parent.add_child(g)
+	return g
 
 
 # ---------------------------------------------------------------- per-frame
 
 func _process(delta: float) -> void:
-	_hp.value = Game.hp / Game.max_hp * 100.0
-	_thirst.value = Game.thirst
-	_stamina.value = Game.stamina / Game.max_stamina * 100.0
-	var ammo := "Stones %d" % Game.stones()
-	if not Game.bow().is_empty() or Game.arrows() > 0:
-		ammo += "    Arrows %d" % Game.arrows()
-	_stones.text = "%s        Bag %d/%d" % [ammo, Game.used_places(), Game.places()]
-	var short := Game.stones() == 0 or (not Game.bow().is_empty() and Game.arrows() == 0)
-	_stones.add_theme_color_override("font_color", Color(1.0, 0.55, 0.45) if short or Game.used_places() >= Game.places() else Color.WHITE)
+	_hp.show_value(Game.hp, Game.max_hp, "Health", "%d / %d" % [int(ceil(Game.hp)), int(round(Game.max_hp))])
+	_thirst.show_value(Game.thirst, 100.0, "Thirst", "%d / 100" % int(ceil(Game.thirst)))
+	_thirst.pips = Game.water
+	_thirst.pips_max = Game.max_water
+	_stamina.show_value(Game.stamina, Game.max_stamina, "Stamina", "%d / %d" % [int(ceil(Game.stamina)), int(round(Game.stamina_cap()))])
+	_stamina.cap = Game.stamina_cap() / Game.max_stamina
+	_xp_note_left = maxf(0.0, _xp_note_left - delta)
+	var need: int = Game.xp_needed(Game.level)
+	_xp.show_value(Game.xp, need, "Level %d" % Game.level, "%d / %d%s" % [Game.xp, need, "   " + _xp_note if _xp_note_left > 0.0 else ""])
+	_points.visible = Game.stat_points > 0
+	_points.text = "%d points to spend  (Esc)" % Game.stat_points if Game.stat_points != 1 else "1 point to spend  (Esc)"
+	# What there is to shoot, for whatever is in hand to shoot it with.
+	var ammo: Array = []
+	if not Game.equipped["sling"].is_empty():
+		ammo.append("Stones %d" % Game.stones())
+	if not Game.bow().is_empty():
+		ammo.append("Arrows %d" % Game.arrows())
+	_stones.text = "        ".join(ammo)
+	_stones.visible = not ammo.is_empty()
+	var short: bool = (not Game.equipped["sling"].is_empty() and Game.stones() == 0) or (not Game.bow().is_empty() and Game.arrows() == 0)
+	_stones.add_theme_color_override("font_color", Color(1.0, 0.55, 0.45) if short else Color.WHITE)
 	_hurt.color.a = move_toward(_hurt.color.a, 0.0, delta * 1.2)
 	_left.visible = not inventory.visible
 	_quests.visible = not inventory.visible
@@ -243,15 +258,14 @@ func _process(delta: float) -> void:
 	if is_instance_valid(world.player):
 		var f: Vector3 = world.player.forward()
 		facing = "    Facing %s" % world.compass(f.x, f.z)
-	_stats.text = "Water %d/%d    Silver %d    Bronze %d%s" % [Game.water, Game.max_water, Game.silver, Game.bronze, facing]
-	_stage.text = "%s   Stage %d of %d   %s   (%s)" % [world.stage.get("year", ""), Game.stage_index + 1, Game.stage_count(), world.stage["name"], world.stage["ref"]]
+	_stats.text = facing.strip_edges()
+	_stage.text = "%s   Stage %d of %d   %s   (%s)%s" % [world.stage.get("year", ""), Game.land_index() + 1, Game.stage_count(), world.stage["name"], world.stage["ref"], "   ·   walked back" if Game.visiting >= 0 else ""]
 	_objective.text = world.objective_text()
 	_quests.text = world.quests.tracker_text() if is_instance_valid(world.quests) else ""
 	var raid_on: bool = is_instance_valid(world.raid) and world.raid.active
 	_camp.visible = raid_on
-	_camp_label.visible = raid_on
-	_camp.value = Game.camp_hp
-	_coords.text = "%s\n%s    M: map" % [world.stage["place"], minimap.coordinates()]
+	_camp.show_value(Game.camp_hp, 100.0, "Camp under attack", "%d / 100" % int(ceil(Game.camp_hp)))
+	_coords.text = "%s\n%s    M: map\n%s" % [world.stage["place"], minimap.coordinates(), Game.clock_text()]
 	_update_markers()
 
 
@@ -349,6 +363,7 @@ func _choose(i: int) -> void:
 	if i < 0 or i >= _cbs.size() or _cbs[i] == null:
 		return
 	var cb: Callable = _cbs[i]
+	Game.play_sound("click")
 	close_panel()
 	if cb.is_valid():
 		cb.call()
@@ -368,18 +383,32 @@ func _set_open(open: bool) -> void:
 		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE if open else Input.MOUSE_MODE_CAPTURED
 
 
+## Clicking into the game while the mouse is free and nothing is open on screen takes hold of it
+## again, for looking about and striking (after a save is loaded straight into the stage, or the
+## window was left and come back to). That click only takes hold; it does not also strike.
+func _unhandled_input(event: InputEvent) -> void:
+	if no_capture or title_up or Game.ui_open:
+		return
+	if event is InputEventMouseButton and event.pressed and Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
+		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+		Game.block_input()
+		get_viewport().set_input_as_handled()
+
+
 func _input(event: InputEvent) -> void:
 	if not (event is InputEventKey) or not event.pressed or event.echo:
 		return
 	var key: int = event.physical_keycode
+	if title_up and not menu.is_open():
+		return
 	if inventory.visible:
 		get_viewport().set_input_as_handled()
 		if key == KEY_ESCAPE or key == KEY_I or key == KEY_TAB or (key == KEY_E and inventory.mode == "chest"):
 			inventory.close()
-	elif _settings.visible:
+	elif menu.is_open():
 		get_viewport().set_input_as_handled()
 		if key == KEY_ESCAPE:
-			_close_settings()
+			menu.close()
 	elif _map_panel.visible:
 		get_viewport().set_input_as_handled()
 		if key == KEY_M or key == KEY_ESCAPE or key == KEY_ENTER:
@@ -408,31 +437,11 @@ func _input(event: InputEvent) -> void:
 
 # ---------------------------------------------------------------- menus
 
+## The menu (menu.gd), opened at The Journey.
 func open_pause() -> void:
-	var text := "[b]Controls[/b]\nW A S D  move        Shift  sprint        Space  jump\nLeft mouse  strike (press again for the next blow, up to three); with a bow, hold to draw and release to shoot\nRight mouse  hold to whirl the sling, release to throw; the ring shows where it will land\nR  put your weapons away or take them up        E  talk or use        Q  drink        I  inventory        M  map        Esc  this menu\n\nThirst falls as you travel and faster when you run. Sprinting tires you; walk to get your breath back. Rest inside the camp to heal.\nEach sling stone and arrow is used up when shot. Gather stones from stony ground, or buy them from the trader.\nHeavier weapons swing more slowly. The game is saved only when you sleep in your own tent.\nRaiders go for the camp. If the camp falls, the stage starts again."
-	var options: Array = [["Settings", open_settings], ["Change how you look", open_creator]]
-	if Game.has_save():
-		options.append(["Go back to where you last slept", _confirm_load])
-	options.append_array([
-		["Start a new journey", _confirm_new],
-		["Quit the game", world.quit_game],
-		["Resume", Callable()],
-	])
-	dialog("Paused", text, options)
-
-
-func _confirm_load() -> void:
-	dialog("Go back to your last save?", "Everything since you last slept in your tent will be lost.", [
-		["Yes, wake in my tent", world.load_checkpoint],
-		["No, keep going", Callable()],
-	])
-
-
-func _confirm_new() -> void:
-	dialog("Start a new journey?", "Your saved progress will be replaced.", [
-		["Yes, begin again from the Red Sea", world.new_journey],
-		["No, keep going", Callable()],
-	])
+	_panel.visible = false
+	_cbs.clear()
+	menu.open("journey")
 
 
 func open_inventory() -> void:
@@ -452,6 +461,18 @@ func open_shop() -> void:
 	_panel.visible = false
 	_cbs.clear()
 	inventory.open("trade", int(world.stage["tier"]), _inventory_closed)
+	_set_open(true)
+
+
+## A caravan's goods beside the bag: a few rare pieces, dear, each gone once bought. `stock` is
+## the caravan's own grid, so what is bought stays bought.
+func open_caravan(stock: Array, title: String) -> void:
+	last_dialog = "\"Goods from Egypt and the lands of incense. You will not see their like again.\"  You have %d silver." % Game.silver
+	if auto:
+		return
+	_panel.visible = false
+	_cbs.clear()
+	inventory.open("trade", int(world.stage["tier"]), _inventory_closed, {"stock": stock, "title": title})
 	_set_open(true)
 
 
@@ -476,29 +497,82 @@ func _inventory_closed() -> void:
 	Game.block_input()
 
 
+## The camp's smith: he makes what you carry stronger, and forges new arms from your bronze.
 func open_smith() -> void:
+	var t := "\"Bring me silver for the work and bronze for the metal.\"\n\nYou have [b]%d silver[/b] and [b]%d bronze[/b]." % [Game.silver, Game.bronze]
+	dialog("Camp craftsman", t, [
+		["Make what I carry stronger", _smith_improve.bind(0)],
+		["Forge something new", _smith_forge.bind(0)],
+		["Leave", Callable()],
+	])
+
+
+## Everything that can be made stronger: what is worn first, then what is in the bag.
+func _smith_improve(page: int) -> void:
 	var cap := Game.max_plus()
-	var options: Array = []
+	var gear: Array = []
 	for slot in Game.Items.EQUIP_SLOTS:
-		var inst: Dictionary = Game.equipped[slot]
-		if not Game.can_strengthen(inst):
-			continue
+		if Game.can_strengthen(Game.equipped[slot]):
+			gear.append(Game.equipped[slot])
+	for it in Game.bag:
+		if Game.can_strengthen(it):
+			gear.append(it)
+	var options: Array = []
+	for inst in gear:
 		if int(inst["plus"]) >= cap:
 			options.append(["%s cannot be made stronger here" % Game.item_name(inst), Callable(), false])
 			continue
 		var c := Game.upgrade_cost(inst)
-		options.append(["Strengthen %s to +%d  for %d silver and %d bronze" % [Game.item_name(inst), int(inst["plus"]) + 1, c["silver"], c["bronze"]], _upgrade.bind(inst), Game.can_upgrade(inst)])
-	options.append(["Leave", Callable()])
-	var t := "\"Bring me silver for the work and bronze for the metal.\"\n\nYou have %d silver and %d bronze. Gear can be strengthened to +%d here." % [Game.silver, Game.bronze, cap]
+		var gain := "damage %d to %d" % [int(round(Game.stat(inst, "damage"))), int(round(Game.stat(inst, "damage") / (1.0 + Game.PLUS_POWER * int(inst["plus"])) * (1.0 + Game.PLUS_POWER * (int(inst["plus"]) + 1))))]
+		if Game.stat(inst, "damage") <= 0.0:
+			gain = "defense %d to %d" % [int(round(Game.stat(inst, "defense"))), int(round(Game.stat(inst, "defense") / (1.0 + Game.PLUS_ARMOR * int(inst["plus"])) * (1.0 + Game.PLUS_ARMOR * (int(inst["plus"]) + 1))))]
+		options.append(["%s to +%d   (%s)   for %d silver, %d bronze" % [Game.item_name(inst), int(inst["plus"]) + 1, gain, c["silver"], c["bronze"]], _upgrade.bind(inst, page), Game.can_upgrade(inst)])
+	var t := "\"Each working makes it bite deeper, or turn a harder blow.\"\n\nYou have [b]%d silver[/b] and [b]%d bronze[/b]. Gear can be made stronger up to +%d here." % [Game.silver, Game.bronze, cap]
 	if cap < 5:
 		t += " A proper workshop could do more."
-	dialog("Camp craftsman", t, options)
+	_smith_page("Make it stronger", t, options, page, _smith_improve)
 
 
-func _upgrade(inst: Dictionary) -> void:
+## What he can forge at this stage (data/forge.gd).
+func _smith_forge(page: int) -> void:
+	var options: Array = []
+	for r in Game.forge_list(int(world.stage["tier"])):
+		var made := Game.new_item(str(r["item"]))
+		var what := Game.item_desc(made)
+		var cost := "%d silver, %d bronze" % [r["silver"], r["bronze"]]
+		if r.has("needs"):
+			cost += ", your %s" % str(Game.Items.ITEMS[r["needs"]]["name"]).to_lower()
+		options.append(["%s   (%s)   for %s" % [Game.item_name(made), what, cost], _forge.bind(r, page), Game.can_forge(r)])
+	var t := "\"I can make these with what the camp has. You bring the bronze.\"\n\nYou have [b]%d silver[/b] and [b]%d bronze[/b]. Bronze is taken from raiders." % [Game.silver, Game.bronze]
+	_smith_page("Forge something new", t, options, page, _smith_forge)
+
+
+## One page of a long list at the smith's: up to six lines, then More, and Back.
+func _smith_page(heading: String, text: String, options: Array, page: int, again: Callable) -> void:
+	var per := 6
+	var pages := maxi(1, int(ceil(options.size() / float(per))))
+	page = clampi(page, 0, pages - 1)
+	var shown: Array = options.slice(page * per, page * per + per)
+	if options.is_empty():
+		text += "\n\n[i]There is nothing here for him to work on.[/i]"
+	if pages > 1:
+		shown.append(["More...   (page %d of %d)" % [page + 1, pages], again.bind((page + 1) % pages)])
+	shown.append(["Back", open_smith])
+	dialog("Camp craftsman:  %s" % heading, text, shown)
+
+
+func _upgrade(inst: Dictionary, page: int = 0) -> void:
 	if Game.try_upgrade(inst):
 		Game.say("Strengthened: %s" % Game.item_name(inst))
-	open_smith()
+		Game.play_sound("anvil")
+	_smith_improve(page)
+
+
+func _forge(recipe: Dictionary, page: int) -> void:
+	if Game.try_forge(recipe):
+		Game.say("Forged: %s. It is in your bag." % Game.Items.ITEMS[recipe["item"]]["name"])
+		Game.play_sound("anvil")
+	_smith_forge(page)
 
 
 # ---------------------------------------------------------------- character creator
@@ -640,6 +714,11 @@ func _build_map(root: Control) -> void:
 	v.add_child(_region)
 	_map_note = _text("", 15)
 	v.add_child(_map_note)
+	# Walking back to the lands of earlier stages, and returning (see open_map).
+	_map_travel = HFlowContainer.new()
+	_map_travel.add_theme_constant_override("h_separation", 8)
+	_map_travel.add_theme_constant_override("v_separation", 6)
+	v.add_child(_map_travel)
 	v.add_child(_small_button("Close  (M)", close_map, 120))
 	_map_panel.visible = false
 	root.add_child(_map_panel)
@@ -652,9 +731,36 @@ func open_map() -> void:
 	_region.stage_index = Game.stage_index
 	_region.queue_redraw()
 	_map_note.text = "Camp %d of %d:  %s  (%s)\nCamp sites follow traditional identifications; several are debated." % [
-		Game.stage_index + 1, Game.stage_count(), world.stage["place"], world.stage["ref"]]
+		Game.stage_index + 1, Game.stage_count(), Game.Stages.LIST[Game.stage_index]["place"], Game.Stages.LIST[Game.stage_index]["ref"]]
+	for c in _map_travel.get_children():
+		_map_travel.remove_child(c)
+		c.queue_free()
+	if Game.visiting >= 0:
+		_map_note.text = "You have walked back to the land of stage %d:  %s  (%s)." % [Game.visiting + 1, world.stage["place"], world.stage["ref"]]
+		var back := _small_button("Return to the camp", _return_from_map, 240)
+		back.disabled = world.player.in_fight()
+		_map_travel.add_child(back)
+		if back.disabled:
+			_map_travel.add_child(_text("Not while enemies are on you.", 15))
+	elif Game.stage_index > 0:
+		if world.can_travel_back():
+			_map_travel.add_child(_text("Walk back to an earlier land:", 15))
+			for i in Game.stage_index:
+				_map_travel.add_child(_small_button("%d.  %s" % [i + 1, Game.Stages.LIST[i]["name"]], _travel_from_map.bind(i), 220))
+		else:
+			_map_travel.add_child(_text("From your camp you can walk back to the lands of earlier stages.", 15))
 	_map_panel.visible = true
 	_set_open(true)
+
+
+func _travel_from_map(i: int) -> void:
+	close_map()
+	world.travel_back(i)
+
+
+func _return_from_map() -> void:
+	close_map()
+	world.return_to_camp()
 
 
 func close_map() -> void:
@@ -666,105 +772,12 @@ func close_map() -> void:
 
 
 # ---------------------------------------------------------------- settings
-
-var _syncing := false
-
-
-func _build_settings(root: Control) -> void:
-	_settings = PanelContainer.new()
-	_anchor(_settings, 0.5, 0.5, 0.5, 0.5, 0, 0, 0, 0)
-	_settings.grow_horizontal = Control.GROW_DIRECTION_BOTH
-	_settings.grow_vertical = Control.GROW_DIRECTION_BOTH
-	_settings.add_theme_stylebox_override("panel", _panel_style)
-	var v := VBoxContainer.new()
-	v.add_theme_constant_override("separation", 12)
-	_settings.add_child(v)
-	v.add_child(_text("Settings", 26, Color(1.0, 0.85, 0.5)))
-	for row in [["master", "Master volume", 0.0, 1.0, 0.05], ["music", "Music volume", 0.0, 1.0, 0.05],
-			["sensitivity", "Mouse sensitivity", 0.3, 2.5, 0.05], ["fov", "Field of view", 55.0, 100.0, 1.0]]:
-		var h := HBoxContainer.new()
-		h.add_theme_constant_override("separation", 14)
-		var l := _text(str(row[1]), 18)
-		l.custom_minimum_size.x = 210
-		h.add_child(l)
-		var slider := HSlider.new()
-		slider.min_value = float(row[2])
-		slider.max_value = float(row[3])
-		slider.step = float(row[4])
-		slider.custom_minimum_size = Vector2(320, 26)
-		slider.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-		slider.focus_mode = Control.FOCUS_NONE
-		h.add_child(slider)
-		var shown := _text("", 18, Color(1.0, 0.95, 0.75))
-		shown.custom_minimum_size.x = 70
-		h.add_child(shown)
-		slider.value_changed.connect(_on_setting.bind(str(row[0])))
-		_setting_rows[row[0]] = [slider, shown]
-		v.add_child(h)
-	for row in [["invert_y", "Invert mouse up and down"], ["fullscreen", "Full screen"], ["vsync", "V-Sync"], ["shadows", "Shadows"]]:
-		var box := CheckBox.new()
-		box.text = str(row[1])
-		box.add_theme_font_size_override("font_size", 18)
-		box.focus_mode = Control.FOCUS_NONE
-		box.toggled.connect(_on_setting.bind(str(row[0])))
-		_setting_rows[row[0]] = [box, null]
-		v.add_child(box)
-	var bottom := HBoxContainer.new()
-	bottom.add_theme_constant_override("separation", 10)
-	bottom.add_child(_small_button("Defaults", _settings_defaults, 110))
-	bottom.add_child(_small_button("Back  (Esc)", _close_settings, 130))
-	v.add_child(bottom)
-	_settings.visible = false
-	root.add_child(_settings)
+var title_up := false       # the title screen is showing: the game's keys do nothing
 
 
-## The settings page, from the pause menu. Changes take effect at once and are kept.
-func open_settings() -> void:
-	if auto:
-		return
+## The settings page of the menu, from the title screen (which passes what to do on leaving it)
+## or anywhere else. Changes take effect at once and are kept.
+func open_settings(back: Callable = Callable()) -> void:
 	_panel.visible = false
 	_cbs.clear()
-	_sync_settings()
-	_settings.visible = true
-	_set_open(true)
-
-
-func _close_settings() -> void:
-	_settings.visible = false
-	open_pause()
-
-
-func _on_setting(value: Variant, key: String) -> void:
-	if _syncing:
-		return
-	Game.set_setting(key, value)
-	_sync_settings()
-
-
-func _settings_defaults() -> void:
-	for key in Game.DEFAULT_SETTINGS:
-		Game.settings[key] = Game.DEFAULT_SETTINGS[key]
-	Game.apply_settings()
-	Game.save_settings()
-	_sync_settings()
-
-
-## Shows the current values on the sliders and boxes.
-func _sync_settings() -> void:
-	_syncing = true
-	for key in _setting_rows:
-		var row: Array = _setting_rows[key]
-		var value: Variant = Game.settings[key]
-		if row[0] is CheckBox:
-			(row[0] as CheckBox).button_pressed = bool(value)
-		else:
-			(row[0] as HSlider).value = float(value)
-			var shown: Label = row[1]
-			match key:
-				"master", "music":
-					shown.text = "%d%%" % int(round(float(value) * 100.0))
-				"sensitivity":
-					shown.text = "%.2fx" % float(value)
-				"fov":
-					shown.text = "%d°" % int(value)
-	_syncing = false
+	menu.open("settings", back)
